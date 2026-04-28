@@ -13,7 +13,7 @@
   "reasoningContent": "auto",
   "reasoningCacheMaxEntries": 0,
   "reasoningCacheMaxAgeMs": 2592000000,
-  "reasoningCacheMaxSizeBytes": 10485760,
+  "reasoningCacheMaxSizeBytes": 209715200,
   "reasoningCachePath": "~/.claude/deepseek-v4-opencode-claude-code-bridge-reasoning-cache.json",
   "requestBodyLimitBytes": 104857600,
   "upstreamTimeoutMs": 600000

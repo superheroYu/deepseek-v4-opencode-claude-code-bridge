@@ -109,7 +109,7 @@ Default config:
   "reasoningContent": "auto",
   "reasoningCacheMaxEntries": 0,
   "reasoningCacheMaxAgeMs": 2592000000,
-  "reasoningCacheMaxSizeBytes": 10485760,
+  "reasoningCacheMaxSizeBytes": 209715200,
   "reasoningCachePath": "~/.claude/deepseek-v4-opencode-claude-code-bridge-reasoning-cache.json",
   "requestBodyLimitBytes": 104857600,
   "upstreamTimeoutMs": 600000
@@ -132,7 +132,7 @@ Fields:
 - `reasoningCacheMaxAgeMs`: maximum age for a cache entry since its last use.
   The default is 30 days. Set `0` to disable age-based trimming.
 - `reasoningCacheMaxSizeBytes`: maximum serialized cache file size. The default
-  is 10 MB. When the cache exceeds this size, the oldest entries are removed.
+  is 200 MB. When the cache exceeds this size, the oldest entries are removed.
 - `reasoningCachePath`: local DeepSeek reasoning cache path.
 - `requestBodyLimitBytes`: maximum accepted request body size. The default is
   100 MB.
@@ -322,7 +322,7 @@ node --test
   placeholder for missing reasoning. That avoids a hard request failure but may
   reduce continuation quality; start a fresh Claude Code session when possible.
 - Reasoning cache is trimmed unexpectedly: by default, entries unused for 30
-  days expire and the serialized cache is capped at 10 MB. Increase
+  days expire and the serialized cache is capped at 200 MB. Increase
   `reasoningCacheMaxAgeMs` or `reasoningCacheMaxSizeBytes`, or set either value
   to `0` to disable that dimension.
 - `401` or `403` from OpenCode Go: verify that Claude Code settings use
