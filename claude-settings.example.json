@@ -12,6 +12,5 @@
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
     "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro[1m]",
     "CLAUDE_CODE_EFFORT_LEVEL": "max"
-  },
-  "model": "deepseek-v4-pro[1m]"
+  }
 }

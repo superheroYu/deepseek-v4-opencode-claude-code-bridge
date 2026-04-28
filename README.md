@@ -203,10 +203,19 @@ Create a Claude Code settings file, for example
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
     "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro[1m]",
     "CLAUDE_CODE_EFFORT_LEVEL": "max"
-  },
-  "model": "deepseek-v4-pro[1m]"
+  }
 }
 ```
+
+The example above follows the DeepSeek-style setup and sets the main model with
+`ANTHROPIC_MODEL`. If you keep `ANTHROPIC_MODEL`, switching models in Claude
+Code is only a per-conversation choice; new conversations will still fall back
+to the model named by `ANTHROPIC_MODEL`. If you want Claude Code's model
+switcher to control the default model mapping, remove `ANTHROPIC_MODEL` and
+choose the model from Claude Code's UI or `/model` command. Claude Code will
+maintain its own `model` field. Then `sonnet` and `opus` map to
+`deepseek-v4-pro[1m]`, while `haiku` and small/fast calls map to
+`deepseek-v4-flash`.
 
 You can either keep this as a separate settings file and pass it with
 `--settings`, or replace Claude Code's default `~/.claude/settings.json` with
@@ -250,14 +259,23 @@ forwards that key to OpenCode Go.
 
 `CLAUDE_CODE_EFFORT_LEVEL=max` asks Claude Code to use the highest available
 reasoning effort with the selected backend. You can lower or remove it if you
-prefer faster responses.
+prefer faster responses. In practice, reasoning effort is not a precise control:
+Claude Code session state, `/effort`, `effortLevel`, and
+`CLAUDE_CODE_EFFORT_LEVEL` can interact, and DeepSeek/OpenCode Go may normalize
+the final value. Treat it as a requested effort hint rather than an exact knob.
 
 When Claude Code includes Anthropic-format `thinking` and `output_config.effort`
 fields in a request, the bridge translates them to DeepSeek/OpenAI-compatible
 `thinking` and `reasoning_effort` for DeepSeek model names only. The bridge does
 not force thinking from `config.json`; per-session `/effort` remains owned by
-Claude Code. For DeepSeek V4 compatibility, `low` and `medium` effort are sent
-as `high`, while `xhigh` is sent as `max`.
+Claude Code. According to DeepSeek's thinking-mode guide, thinking is enabled
+by default, and complex agent requests such as Claude Code/OpenCode may be
+treated as max-effort thinking requests. In practice, `/effort` and
+`effortLevel` influence the effort requested from Claude Code, but they do not
+guarantee exact backend behavior. If Claude Code does not send a `thinking`
+field, the bridge lets DeepSeek use its own default behavior. For DeepSeek V4
+compatibility, `low` and `medium` effort are sent as `high`, while `xhigh` is
+sent as `max`.
 
 When DeepSeek returns `reasoning_content`, the bridge emits Anthropic-compatible
 `thinking` content blocks so Claude Code can display thinking output. The same
@@ -273,8 +291,7 @@ To experiment with another `/v1/chat/completions` Go model, add its model ID to
     "ANTHROPIC_API_KEY": "sk-opencode-go-key",
     "ANTHROPIC_MODEL": "kimi-k2.6",
     "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
-  },
-  "model": "kimi-k2.6"
+  }
 }
 ```
 

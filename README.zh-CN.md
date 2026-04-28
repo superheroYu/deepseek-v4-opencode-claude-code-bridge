@@ -193,10 +193,17 @@ CLAUDE_OPENCODE_PROXY_CONFIG=./config.json node server.js
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
     "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro[1m]",
     "CLAUDE_CODE_EFFORT_LEVEL": "max"
-  },
-  "model": "deepseek-v4-pro[1m]"
+  }
 }
 ```
+
+上面的示例沿用 DeepSeek 风格配置，通过 `ANTHROPIC_MODEL` 指定主模型。
+如果保留 `ANTHROPIC_MODEL`，那么在 Claude Code 里切换模型通常只对当前对话有效；
+新对话仍会回到 `ANTHROPIC_MODEL` 指定的模型。如果你希望 Claude Code 的模型切换器
+真正控制默认模型映射，请删除 `ANTHROPIC_MODEL`，然后在 Claude Code 的界面或
+`/model` 命令里选择模型。Claude Code 会自己维护 `model` 字段。这样 `sonnet`
+和 `opus` 会映射到 `deepseek-v4-pro[1m]`，`haiku` 和 small/fast 调用会映射到
+`deepseek-v4-flash`。
 
 你可以把这份内容保存成单独的 settings 文件，然后通过 `--settings` 使用；也可以直接
 用同样内容覆盖 Claude Code 默认的 `~/.claude/settings.json`。直接覆盖默认 settings
@@ -238,14 +245,21 @@ Code 会把 `ANTHROPIC_API_KEY` 作为 `x-api-key` 发送；默认情况下 brid
 key 转发给 OpenCode Go。
 
 `CLAUDE_CODE_EFFORT_LEVEL=max` 会让 Claude Code 对所选后端使用最高可用推理努力。
-如果你更希望响应速度快一些，可以降低或删除它。
+如果你更希望响应速度快一些，可以降低或删除它。实际使用中，思考强度不是一个精确可控的旋钮：
+Claude Code 的会话状态、`/effort`、`effortLevel` 和 `CLAUDE_CODE_EFFORT_LEVEL`
+可能互相影响，而 DeepSeek/OpenCode Go 也可能对最终值做归一化。更准确地说，它是
+“请求的思考强度提示”，不是严格保证的后端档位。
 
 当 Claude Code 在请求体里带上 Anthropic 格式的 `thinking` 和
 `output_config.effort` 字段时，bridge 会把它们翻译成 DeepSeek/OpenAI 兼容的
 `thinking` 和 `reasoning_effort`，但只对 DeepSeek 模型名这样做。bridge 不会从
 `config.json` 强行开启 thinking；单次会话里的 `/effort` 仍然由 Claude Code 自己控制。
-为了匹配 DeepSeek V4 的兼容行为，`low` 和 `medium` effort 会按 `high` 发送，
-`xhigh` 会按 `max` 发送。
+根据 DeepSeek 的 thinking mode 文档，思考模式默认开启，Claude Code/OpenCode 这类复杂
+Agent 请求可能会被按 max effort 的思考请求处理。实际使用中，`/effort` 和
+`effortLevel` 会影响 Claude Code 请求的思考强度，但不能保证后端严格按这个档位执行；
+它们也不是唯一的 thinking 开关。如果 Claude Code 没有发送 `thinking` 字段，bridge 会让
+DeepSeek 使用自己的默认行为。为了匹配 DeepSeek V4 的兼容行为，`low` 和 `medium` effort
+会按 `high` 发送，`xhigh` 会按 `max` 发送。
 
 当 DeepSeek 返回 `reasoning_content` 时，bridge 会把它包装成 Anthropic 兼容的
 `thinking` content block，让 Claude Code 可以显示思考内容。同一份 reasoning 也会继续
@@ -261,8 +275,7 @@ key 转发给 OpenCode Go。
     "ANTHROPIC_API_KEY": "sk-opencode-go-key",
     "ANTHROPIC_MODEL": "kimi-k2.6",
     "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
-  },
-  "model": "kimi-k2.6"
+  }
 }
 ```
 
