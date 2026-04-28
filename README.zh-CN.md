@@ -1,0 +1,407 @@
+# DeepSeek V4 OpenCode Claude Code Bridge
+
+语言: [English](README.md) | [简体中文](README.zh-CN.md)
+
+DeepSeek V4 OpenCode Claude Code Bridge 是一个本地兼容桥接服务，用于把
+OpenCode Go 的 DeepSeek V4 系列模型接入 Claude Code。
+
+Claude Code 会发送 Anthropic `/v1/messages` 请求。OpenCode Go 通过
+OpenAI 兼容的 `/v1/chat/completions` 暴露 DeepSeek V4。这个项目负责在
+两种协议之间转换，并保存 DeepSeek V4 在 thinking/tool call 场景下要求回传
+的 `reasoning_content` 历史。
+
+其他使用 `/v1/chat/completions` 的 OpenCode Go 模型也可能可用，但属于
+best-effort/实验性支持，因为它们的工具调用行为可能和 DeepSeek V4 不完全一致。
+
+## 它做什么
+
+请求路径:
+
+```text
+Claude Code
+  -> local bridge /v1/messages
+  -> OpenCode Go /v1/chat/completions
+  -> OpenAI-compatible model
+```
+
+它会把:
+
+```text
+Anthropic Messages API
+messages[].content text/tool_use/tool_result
+tools[{ name, description, input_schema }]
+tool_choice
+SSE message_* and content_block_* events
+```
+
+转换为:
+
+```text
+OpenAI-compatible Chat Completions
+messages role=user/assistant/tool
+tools[{ type: "function", function: { name, description, parameters } }]
+tool_calls
+streaming chat completion chunks
+```
+
+对于 DeepSeek V4，它还会保存 thinking 模式工具调用需要的
+`reasoning_content`。DeepSeek 要求后续带有历史工具调用的请求必须把对应的
+reasoning 内容一起传回去。本项目会把这些内容写入本地 cache，避免 Claude Code
+连续会话中出现 `reasoning_content must be passed back` 错误。
+
+## 当前范围
+
+已支持:
+
+- Claude Code `/v1/messages` 非流式和流式请求。
+- 文本内容。
+- Claude Code 工具调用和工具结果。
+- OpenAI 兼容 function calling。
+- DeepSeek V4 工具调用历史的 `reasoning_content` 回放。
+- 已验证目标: OpenCode Go DeepSeek V4 Pro 和 Flash。
+- 实验性目标: 其他 OpenCode Go `/v1/chat/completions` 模型，取决于具体模型和
+  provider 的 function calling 支持。
+- Windows、Linux、macOS，运行时为 Node.js。
+
+不是完整 Anthropic API 实现:
+
+- 不针对图片、音频、prompt caching 以及所有 Anthropic beta 字段。
+- `tool_choice` 的强制模式会转换成 system 指令，因为部分 OpenCode Go 上游模型
+  会拒绝强制 `tool_choice`。
+- DeepSeek `reasoning_content` 回放默认只对 DeepSeek 模型名启用。其他模型会收到
+  标准 OpenAI 风格 chat messages。
+- bridge 发出的 thinking blocks 使用空 `signature`。Claude Code 在本地代理路径上可以接受，
+  但这些不是 Anthropic 签名过的 thinking blocks。
+- 这是兼容桥接服务，不是原生 Anthropic endpoint 的替代品。
+
+## 要求
+
+- Node.js 18 或更新版本。
+- OpenCode Go API key。
+- Claude Code。
+
+本项目不需要 npm 依赖。
+
+## 配置
+
+仓库里已经包含可直接使用的 `config.json`。它不包含任何 API key。只有在需要修改端口、
+上游 URL、模型列表或 reasoning cache 路径时，才需要编辑它。
+
+默认配置:
+
+```json
+{
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "upstream": {
+    "baseUrl": "https://opencode.ai/zen/go/v1"
+  },
+  "models": [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash"
+  ],
+  "reasoningContent": "auto",
+  "reasoningCacheMaxEntries": 0,
+  "reasoningCachePath": "~/.claude/deepseek-v4-opencode-claude-code-bridge-reasoning-cache.json",
+  "requestBodyLimitBytes": 104857600,
+  "upstreamTimeoutMs": 600000,
+  "reasoningCacheWarnSizeBytes": 10485760
+}
+```
+
+字段说明:
+
+- `listen.host`: 本地监听地址。除非你明确需要局域网访问，否则保持 `127.0.0.1`。
+- `listen.port`: 本地监听端口。
+- `upstream.baseUrl`: OpenAI 兼容上游 base URL。OpenCode Go 使用
+  `https://opencode.ai/zen/go/v1`。
+- `models`: 本地 `/v1/models` 返回的模型 ID。默认建议只放 DeepSeek V4 Pro/Flash。
+- `reasoningContent`: `auto`、`always` 或 `never`。OpenCode Go 建议保持 `auto`，
+  只对 DeepSeek 模型名回放 reasoning 历史。
+- `reasoningCacheMaxEntries`: 每个 reasoning cache bucket 的最大条目数。默认 `0`
+  表示不自动裁剪，这对仍然可能包含 DeepSeek 工具调用历史的旧 Claude Code 会话最稳。
+- `reasoningCachePath`: 本地 DeepSeek reasoning cache 路径。
+- `requestBodyLimitBytes`: 接受的最大请求体大小，默认 100 MB。
+- `upstreamTimeoutMs`: 等待 OpenCode Go 上游请求的最长时间，超时后会主动中止。
+  默认 10 分钟。
+- `reasoningCacheWarnSizeBytes`: reasoning cache 文件大小告警阈值，默认 10 MB。
+  设置为 `0` 可关闭告警。
+
+## 启动
+
+启动本地 bridge。
+
+Windows PowerShell:
+
+```powershell
+npm start
+```
+
+Windows cmd:
+
+```cmd
+start.cmd
+```
+
+Linux/macOS:
+
+```bash
+chmod +x ./start.sh
+./start.sh
+```
+
+默认情况下，bridge 会从 Claude Code 的 `ANTHROPIC_API_KEY` 请求头接收 OpenCode
+Go key。请把 OpenCode Go key 放在 Claude Code settings 里，不要放进 `config.json`。
+
+也可以显式指定配置文件:
+
+```bash
+node server.js --config ./config.json
+```
+
+或者:
+
+```bash
+CLAUDE_OPENCODE_PROXY_CONFIG=./config.json node server.js
+```
+
+## Claude Code Settings
+
+创建 Claude Code settings 文件，例如 `~/.claude/settings.opencode-proxy.json`。
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_API_KEY": "sk-opencode-go-key",
+    "API_TIMEOUT_MS": "3000000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  },
+  "model": "deepseek-v4-pro"
+}
+```
+
+你可以把这份内容保存成单独的 settings 文件，然后通过 `--settings` 使用；也可以直接
+用同样内容覆盖 Claude Code 默认的 `~/.claude/settings.json`。直接覆盖默认 settings
+通常更简单，因为它可以避免和旧的 `ANTHROPIC_AUTH_TOKEN` 或直连 provider 配置发生合并冲突。
+
+运行 Claude Code:
+
+Windows PowerShell:
+
+```powershell
+claude --settings "$HOME\.claude\settings.opencode-proxy.json"
+```
+
+Linux/macOS:
+
+```bash
+claude --settings ~/.claude/settings.opencode-proxy.json
+```
+
+快速测试:
+
+Windows PowerShell:
+
+```powershell
+claude -p "Reply OK only" --max-turns 1 --settings "$HOME\.claude\settings.opencode-proxy.json"
+```
+
+Linux/macOS:
+
+```bash
+claude -p "Reply OK only" --max-turns 1 --settings ~/.claude/settings.opencode-proxy.json
+```
+
+如果 Windows 上出现 `Settings file not found`，请传绝对路径，不要传 `~`，例如
+`C:\Users\<you>\.claude\settings.opencode-proxy.json`。
+
+本地 bridge 请使用 `ANTHROPIC_API_KEY`，不要使用 `ANTHROPIC_AUTH_TOKEN`。Claude
+Code 会把 `ANTHROPIC_API_KEY` 作为 `x-api-key` 发送；默认情况下 bridge 会把这个
+key 转发给 OpenCode Go。
+
+`CLAUDE_CODE_EFFORT_LEVEL=max` 会让 Claude Code 对所选后端使用最高可用推理努力。
+如果你更希望响应速度快一些，可以降低或删除它。
+
+当 Claude Code 在请求体里带上 Anthropic 格式的 `thinking` 和
+`output_config.effort` 字段时，bridge 会把它们翻译成 DeepSeek/OpenAI 兼容的
+`thinking` 和 `reasoning_effort`，但只对 DeepSeek 模型名这样做。bridge 不会从
+`config.json` 强行开启 thinking；单次会话里的 `/effort` 仍然由 Claude Code 自己控制。
+为了匹配 DeepSeek V4 的兼容行为，`low` 和 `medium` effort 会按 `high` 发送，
+`xhigh` 会按 `max` 发送。
+
+当 DeepSeek 返回 `reasoning_content` 时，bridge 会把它包装成 Anthropic 兼容的
+`thinking` content block，让 Claude Code 可以显示思考内容。同一份 reasoning 也会继续
+缓存起来，用于后续 DeepSeek 工具调用历史回放。
+
+如果想实验其他 `/v1/chat/completions` Go 模型，先把模型 ID 加到 `config.json`，
+再修改 Claude Code 的模型字段，例如:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+    "ANTHROPIC_API_KEY": "sk-opencode-go-key",
+    "ANTHROPIC_MODEL": "kimi-k2.6",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
+  },
+  "model": "kimi-k2.6"
+}
+```
+
+使用 Go API 原始模型 ID，例如 `deepseek-v4-pro` 或 `kimi-k2.6`，不要使用 OpenCode
+应用里的 `opencode-go/<model-id>` 前缀。非 DeepSeek 模型在工具调用行为验证前都应视为
+best-effort。
+
+## 健康检查
+
+```bash
+curl http://127.0.0.1:8787/health
+```
+
+预期结构:
+
+```json
+{
+  "ok": true,
+  "listen": "http://127.0.0.1:8787",
+  "upstream": "https://opencode.ai/zen/go/v1/chat/completions",
+  "upstream_key_source": "request"
+}
+```
+
+如果也要探测 OpenCode Go 上游端点，请传入 OpenCode Go key 并加上
+`?probe=upstream`:
+
+```bash
+curl -H "x-api-key: sk-..." "http://127.0.0.1:8787/health?probe=upstream"
+```
+
+## 开发检查
+
+```bash
+node --check server.js
+node --test
+```
+
+## 故障排查
+
+- `reasoning_content must be passed back`: 保留 reasoning cache 文件，并使用同一个
+  cache 路径重启 bridge，不要过度裁剪旧条目。如果会话历史里仍然有旧的 DeepSeek
+  工具调用，但 cache 已经被删除，建议新开 Claude Code 会话。
+- OpenCode Go 返回 `401` 或 `403`: 检查 Claude Code settings 是否使用
+  `ANTHROPIC_API_KEY` 填写 OpenCode Go key。这个 bridge 不使用
+  `ANTHROPIC_AUTH_TOKEN`，也要避免和全局 Claude 登录配置冲突。
+- Claude Code 一直重试直到超时: 先访问 `http://127.0.0.1:8787/health`
+  确认 bridge 正在运行，再用带 `x-api-key` 的 `/health?probe=upstream` 探测
+  OpenCode Go。只有在上游健康但响应慢时，才考虑调大 `upstreamTimeoutMs`。
+- Claude Code 不显示思考: 确认当前使用的是 DeepSeek 模型，并且上游响应确实包含
+  `reasoning_content`。简单问题可能不会产生可见思考。非 DeepSeek 模型不会收到
+  DeepSeek thinking 扩展字段。
+- Windows 上出现 `Settings file not found`: 请传绝对路径，例如
+  `"$HOME\.claude\settings.opencode-proxy.json"`，不要传 `~/.claude/...`。
+- 端口被占用: 停掉已有 bridge 进程，或者修改 `config.json` 里的 `listen.port`，
+  并同步修改 Claude Code settings 里的 `ANTHROPIC_BASE_URL`。
+
+## 安全说明
+
+- 除非你理解风险，否则保持监听地址为 `127.0.0.1`。
+- 不要把 API key 写进 `config.json`。
+- reasoning cache 可能包含模型推理痕迹，请把它当成本地私有会话状态。
+- 如果删除 reasoning cache，继续旧的 DeepSeek 工具调用会话时可能回退到兼容占位值。
+
+## 对话压缩
+
+Claude Code 可能会压缩长对话。本项目无法从 Claude Code 的压缩摘要中恢复 DeepSeek
+原始 `reasoning_content`，因为 Claude Code 并不会保存这个 DeepSeek 特有字段。
+
+cache 能覆盖的是仍然可恢复的情况:
+
+- 如果压缩移除了旧工具调用块，只保留文字摘要，那些被移除的块不再需要 DeepSeek
+  reasoning 回放。
+- 如果压缩后仍保留近期 `tool_use` 和 `tool_result` 块，并且保留原始 tool call ID，
+  bridge 可以从 cache 中回放对应 reasoning。
+- 如果 cache 被删除、手动裁剪，或来自另一个 bridge 实例，旧 DeepSeek 工具调用历史
+  可能回退到兼容占位值。
+
+长期使用时建议保持 reasoning cache 开启。如果你设置了非零
+`reasoningCacheMaxEntries`，请使用足够高的值，并理解 bridge 无法知道那些当前没有发给它的
+Claude Code 历史会话。
+
+## 为什么需要它
+
+OpenCode Go 通过 `/v1/chat/completions` 暴露许多模型，包括 GLM、Kimi、
+DeepSeek V4、MiMo 和 Qwen。Claude Code 期望的是 Anthropic 兼容的
+`/v1/messages` 协议。这个协议差异导致这些模型虽然能通过 OpenCode Go 调用，却不一定能
+直接作为 Claude Code 的完整 agent backend 使用。
+
+本项目桥接这个协议差异:
+
+- Anthropic tool schema 转成 OpenAI function schema。
+- OpenAI `tool_calls` 转成 Anthropic `tool_use` blocks。
+- Claude `tool_result` blocks 转成 OpenAI `tool` messages。
+- DeepSeek 工具调用历史再次发回时，会缓存并回放 `reasoning_content`。
+
+目标是让 Claude Code 稳定使用 OpenCode Go 上的 DeepSeek V4，并为其他
+chat-completions 模型保留 best-effort 路径。这不是面向所有 provider 的通用网关。
+
+## OpenCode Go 说明
+
+根据 OpenCode Go 文档，这些 Go 模型使用 `/v1/chat/completions`，并提供 OpenAI
+兼容或类似的 chat-completions 接口:
+
+- `glm-5.1`
+- `glm-5`
+- `kimi-k2.6`
+- `kimi-k2.5`
+- `deepseek-v4-pro`
+- `deepseek-v4-flash`
+- `mimo-v2-pro`
+- `mimo-v2-omni`
+- `mimo-v2.5-pro`
+- `mimo-v2.5`
+- `qwen3.6-plus`
+- `qwen3.5-plus`
+
+MiniMax M2.7 和 M2.5 在文档中是 Anthropic `/v1/messages` 模型，所以通常不需要
+这个 bridge 来接 Claude Code。
+
+要实验非 DeepSeek 模型，可以把它加入 `config.json`:
+
+```json
+{
+  "models": [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "kimi-k2.6"
+  ],
+  "reasoningContent": "auto"
+}
+```
+
+## 参考资料
+
+- [OpenCode Go 文档](https://opencode.ai/docs/zh-cn/go/) - OpenCode Go 的模型 ID、
+  API endpoint 和 AI SDK provider 说明。
+- [DeepSeek API 文档](https://api-docs.deepseek.com/zh-cn/) - DeepSeek 官方 API
+  概览。
+- [DeepSeek thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode) -
+  `reasoning_content` 行为以及 thinking 模式工具调用历史的回传要求。
+- [DeepSeek Tool Calls 文档](https://api-docs.deepseek.com/zh-cn/guides/tool_calls) -
+  DeepSeek function/tool calling 行为。
+- [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages) -
+  Claude 兼容客户端期望的 `/v1/messages` 协议结构。
+- [OpenAI Function Calling 指南](https://developers.openai.com/api/docs/guides/function-calling) -
+  OpenAI 风格 function/tool calling 概念。
+- [OpenAI Chat API Reference](https://developers.openai.com/api/reference/resources/chat) -
+  OpenAI 兼容上游常见的 chat-completions 请求和响应结构。

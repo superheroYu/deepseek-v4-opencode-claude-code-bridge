@@ -1,0 +1,24 @@
+{
+  "name": "deepseek-v4-opencode-claude-code-bridge",
+  "version": "0.2.0",
+  "description": "DeepSeek V4 on OpenCode Go compatibility bridge for Claude Code.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js --config ./config.json",
+    "check": "node --check server.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "claude-code",
+    "anthropic",
+    "openai-compatible",
+    "opencode",
+    "opencode-go",
+    "deepseek",
+    "deepseek-v4"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

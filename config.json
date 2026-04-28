@@ -1,0 +1,19 @@
+{
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "upstream": {
+    "baseUrl": "https://opencode.ai/zen/go/v1"
+  },
+  "models": [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash"
+  ],
+  "reasoningContent": "auto",
+  "reasoningCacheMaxEntries": 0,
+  "reasoningCachePath": "~/.claude/deepseek-v4-opencode-claude-code-bridge-reasoning-cache.json",
+  "requestBodyLimitBytes": 104857600,
+  "upstreamTimeoutMs": 600000,
+  "reasoningCacheWarnSizeBytes": 10485760
+}
