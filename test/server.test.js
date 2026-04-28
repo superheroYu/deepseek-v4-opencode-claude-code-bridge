@@ -390,10 +390,80 @@ test("reasoning cache persists tool reasoning across reload", () => {
   assert.equal(bridge.saveReasoningCacheNow(), true);
 
   const cache = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-  assert.equal(cache.toolCallReasoning.persisted_tool, "persisted reasoning");
+  assert.equal(cache.version, 2);
+  assert.equal(cache.toolCallReasoning.persisted_tool.reasoning, "persisted reasoning");
+  assert.equal(typeof cache.toolCallReasoning.persisted_tool.updatedAt, "number");
 
   bridge.loadReasoningCache();
   assert.equal(bridge.getToolReasoning("persisted_tool"), "persisted reasoning");
+});
+
+test("reasoning cache loads legacy strings and skips expired entries", () => {
+  fs.writeFileSync(
+    cachePath,
+    JSON.stringify({
+      version: 1,
+      updatedAt: Date.now(),
+      toolCallReasoning: {
+        legacy_tool: "legacy reasoning",
+        expired_tool: {
+          reasoning: "expired reasoning",
+          updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  bridge.loadReasoningCache();
+  assert.equal(bridge.getToolReasoning("legacy_tool"), "legacy reasoning");
+  assert.equal(bridge.getToolReasoning("expired_tool"), null);
+});
+
+test("reasoning cache trims oldest entries to fit max serialized size", () => {
+  const originalCachePath = process.env.CLAUDE_OPENCODE_REASONING_CACHE;
+  const originalMaxSize = process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES;
+  const originalMaxAge = process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_AGE_MS;
+  const sizeCachePath = path.join(
+    os.tmpdir(),
+    `deepseek-v4-opencode-claude-code-bridge-size-${process.pid}.json`,
+  );
+  const serverPath = require.resolve("../server.js");
+
+  try {
+    process.env.CLAUDE_OPENCODE_REASONING_CACHE = sizeCachePath;
+    process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES = "900";
+    process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_AGE_MS = "0";
+    delete require.cache[serverPath];
+    const limitedBridge = require("../server.js");
+
+    limitedBridge.setToolReasoning("large_1", "x".repeat(700));
+    limitedBridge.setToolReasoning("large_2", "y".repeat(700));
+    assert.equal(limitedBridge.saveReasoningCacheNow(), true);
+
+    const data = fs.readFileSync(sizeCachePath, "utf8");
+    assert.ok(Buffer.byteLength(data, "utf8") <= 900);
+  } finally {
+    fs.rmSync(sizeCachePath, { force: true });
+    fs.rmSync(`${sizeCachePath}.tmp`, { force: true });
+    delete require.cache[serverPath];
+    if (originalCachePath === undefined) {
+      process.env.CLAUDE_OPENCODE_REASONING_CACHE = cachePath;
+    } else {
+      process.env.CLAUDE_OPENCODE_REASONING_CACHE = originalCachePath;
+    }
+    if (originalMaxSize === undefined) {
+      delete process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES;
+    } else {
+      process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES = originalMaxSize;
+    }
+    if (originalMaxAge === undefined) {
+      delete process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_AGE_MS;
+    } else {
+      process.env.CLAUDE_OPENCODE_REASONING_CACHE_MAX_AGE_MS = originalMaxAge;
+    }
+    require("../server.js");
+  }
 });
 
 test("DeepSeek tool_choice any is softened to a system instruction", () => {
@@ -473,6 +543,28 @@ test("createServer returns 413 when request body is too large", async () => {
       delete process.env.CLAUDE_OPENCODE_REQUEST_BODY_LIMIT_BYTES;
     } else {
       process.env.CLAUDE_OPENCODE_REQUEST_BODY_LIMIT_BYTES = originalLimit;
+    }
+    require("../server.js");
+  }
+});
+
+test("invalid numeric config fails with a clear error", () => {
+  const originalPort = process.env.CLAUDE_OPENCODE_PROXY_PORT;
+  const serverPath = require.resolve("../server.js");
+
+  try {
+    process.env.CLAUDE_OPENCODE_PROXY_PORT = "not-a-port";
+    delete require.cache[serverPath];
+    assert.throws(
+      () => require("../server.js"),
+      /Invalid numeric config listen\.port/,
+    );
+  } finally {
+    delete require.cache[serverPath];
+    if (originalPort === undefined) {
+      delete process.env.CLAUDE_OPENCODE_PROXY_PORT;
+    } else {
+      process.env.CLAUDE_OPENCODE_PROXY_PORT = originalPort;
     }
     require("../server.js");
   }

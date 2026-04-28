@@ -11,13 +11,14 @@ const DEFAULT_REASONING_CACHE_PATH = path.join(
   ".claude",
   "deepseek-v4-opencode-claude-code-bridge-reasoning-cache.json",
 );
+const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_REASONING_CACHE_MAX_ENTRIES = 0;
+const DEFAULT_REASONING_CACHE_MAX_AGE_MS = 30 * DAY_MS;
+const DEFAULT_REASONING_CACHE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
-const DEFAULT_REASONING_CACHE_WARN_SIZE_BYTES = 10 * 1024 * 1024;
 const CHAT_COMPLETIONS_RESPONSE_HEADERS = ["content-type", "cache-control"];
 const warnedFinishReasons = new Set();
-let warnedReasoningCacheSize = false;
 
 function readJson(file) {
   try {
@@ -61,9 +62,21 @@ function configValue(config, keys, fallback) {
   return cursor === undefined || cursor === null ? fallback : cursor;
 }
 
-function numberConfig(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
+function numberConfig(name, value, fallback, options = {}) {
+  const number = Number(value === undefined || value === null ? fallback : value);
+  if (!Number.isFinite(number)) {
+    throw new Error(`Invalid numeric config ${name}: ${JSON.stringify(value)}`);
+  }
+  if (options.integer && !Number.isInteger(number)) {
+    throw new Error(`Invalid integer config ${name}: ${JSON.stringify(value)}`);
+  }
+  if (options.min !== undefined && number < options.min) {
+    throw new Error(`Invalid config ${name}: ${number} is below ${options.min}`);
+  }
+  if (options.max !== undefined && number > options.max) {
+    throw new Error(`Invalid config ${name}: ${number} is above ${options.max}`);
+  }
+  return number;
 }
 
 function envValue(name, fallback) {
@@ -81,8 +94,11 @@ function loadConfig() {
     configPath: resolvedPath,
     listenHost:
       envValue("CLAUDE_OPENCODE_PROXY_HOST", configValue(fileConfig, ["listen", "host"], "127.0.0.1")),
-    port: Number(
+    port: numberConfig(
+      "listen.port",
       envValue("CLAUDE_OPENCODE_PROXY_PORT", configValue(fileConfig, ["listen", "port"], 8787)),
+      8787,
+      { integer: true, min: 1, max: 65535 },
     ),
     upstreamBaseUrl: normalizeBaseUrl(
       envValue(
@@ -98,34 +114,51 @@ function loadConfig() {
       configDir,
     ),
     reasoningCacheMaxEntries: numberConfig(
+      "reasoningCacheMaxEntries",
       envValue(
         "CLAUDE_OPENCODE_REASONING_CACHE_MAX_ENTRIES",
         configValue(fileConfig, ["reasoningCacheMaxEntries"], DEFAULT_REASONING_CACHE_MAX_ENTRIES),
       ),
       DEFAULT_REASONING_CACHE_MAX_ENTRIES,
+      { integer: true, min: 0 },
+    ),
+    reasoningCacheMaxAgeMs: numberConfig(
+      "reasoningCacheMaxAgeMs",
+      envValue(
+        "CLAUDE_OPENCODE_REASONING_CACHE_MAX_AGE_MS",
+        configValue(fileConfig, ["reasoningCacheMaxAgeMs"], DEFAULT_REASONING_CACHE_MAX_AGE_MS),
+      ),
+      DEFAULT_REASONING_CACHE_MAX_AGE_MS,
+      { integer: true, min: 0 },
+    ),
+    reasoningCacheMaxSizeBytes: numberConfig(
+      "reasoningCacheMaxSizeBytes",
+      envValue(
+        "CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES",
+        configValue(fileConfig, ["reasoningCacheMaxSizeBytes"], DEFAULT_REASONING_CACHE_MAX_SIZE_BYTES),
+      ),
+      DEFAULT_REASONING_CACHE_MAX_SIZE_BYTES,
+      { integer: true, min: 0 },
     ),
     reasoningContentMode:
       envValue("CLAUDE_OPENCODE_REASONING_CONTENT", configValue(fileConfig, ["reasoningContent"], "auto")),
     requestBodyLimitBytes: numberConfig(
+      "requestBodyLimitBytes",
       envValue(
         "CLAUDE_OPENCODE_REQUEST_BODY_LIMIT_BYTES",
         configValue(fileConfig, ["requestBodyLimitBytes"], DEFAULT_REQUEST_BODY_LIMIT_BYTES),
       ),
       DEFAULT_REQUEST_BODY_LIMIT_BYTES,
+      { integer: true, min: 1 },
     ),
     upstreamTimeoutMs: numberConfig(
+      "upstreamTimeoutMs",
       envValue(
         "CLAUDE_OPENCODE_UPSTREAM_TIMEOUT_MS",
         configValue(fileConfig, ["upstreamTimeoutMs"], DEFAULT_UPSTREAM_TIMEOUT_MS),
       ),
       DEFAULT_UPSTREAM_TIMEOUT_MS,
-    ),
-    reasoningCacheWarnSizeBytes: numberConfig(
-      envValue(
-        "CLAUDE_OPENCODE_REASONING_CACHE_WARN_SIZE_BYTES",
-        configValue(fileConfig, ["reasoningCacheWarnSizeBytes"], DEFAULT_REASONING_CACHE_WARN_SIZE_BYTES),
-      ),
-      DEFAULT_REASONING_CACHE_WARN_SIZE_BYTES,
+      { integer: true, min: 0 },
     ),
     models: Array.isArray(fileConfig.models) && fileConfig.models.length
       ? fileConfig.models
@@ -149,25 +182,58 @@ function sha256(text) {
   return crypto.createHash("sha256").update(text || "", "utf8").digest("hex");
 }
 
+function cacheFileMtimeMs(file) {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return Date.now();
+  }
+}
+
+function normalizeReasoningEntry(value, fallbackUpdatedAt = Date.now()) {
+  if (typeof value === "string") {
+    return { reasoning: value, updatedAt: fallbackUpdatedAt };
+  }
+  if (!value || typeof value !== "object" || typeof value.reasoning !== "string") {
+    return null;
+  }
+  const updatedAt = Number(value.updatedAt);
+  return {
+    reasoning: value.reasoning,
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : fallbackUpdatedAt,
+  };
+}
+
+function isReasoningEntryExpired(entry, now = Date.now()) {
+  const maxAgeMs = CONFIG.reasoningCacheMaxAgeMs;
+  return Number.isFinite(maxAgeMs) && maxAgeMs > 0 && now - entry.updatedAt > maxAgeMs;
+}
+
 function loadReasoningCache() {
   const cache = readJson(CONFIG.reasoningCachePath);
   if (!cache || typeof cache !== "object") return;
+  const fallbackUpdatedAt = Number.isFinite(Number(cache.updatedAt))
+    ? Number(cache.updatedAt)
+    : cacheFileMtimeMs(CONFIG.reasoningCachePath);
 
-  for (const [id, reasoning] of Object.entries(cache.toolCallReasoning || {})) {
-    if (typeof id === "string" && typeof reasoning === "string") {
-      setMapRecent(reasoningByToolCallId, id, reasoning);
+  for (const [id, value] of Object.entries(cache.toolCallReasoning || {})) {
+    const entry = normalizeReasoningEntry(value, fallbackUpdatedAt);
+    if (typeof id === "string" && entry && !isReasoningEntryExpired(entry)) {
+      setMapRecent(reasoningByToolCallId, id, entry, { touch: false });
     }
   }
 
-  for (const [hash, reasoning] of Object.entries(cache.assistantTextReasoning || {})) {
-    if (typeof hash === "string" && typeof reasoning === "string") {
-      setMapRecent(reasoningByAssistantText, hash, reasoning);
+  for (const [hash, value] of Object.entries(cache.assistantTextReasoning || {})) {
+    const entry = normalizeReasoningEntry(value, fallbackUpdatedAt);
+    if (typeof hash === "string" && entry && !isReasoningEntryExpired(entry)) {
+      setMapRecent(reasoningByAssistantText, hash, entry, { touch: false });
     }
   }
 
-  for (const [hash, reasoning] of Object.entries(cache.toolContextReasoning || {})) {
-    if (typeof hash === "string" && typeof reasoning === "string") {
-      setMapRecent(reasoningByToolContext, hash, reasoning);
+  for (const [hash, value] of Object.entries(cache.toolContextReasoning || {})) {
+    const entry = normalizeReasoningEntry(value, fallbackUpdatedAt);
+    if (typeof hash === "string" && entry && !isReasoningEntryExpired(entry)) {
+      setMapRecent(reasoningByToolContext, hash, entry, { touch: false });
     }
   }
 
@@ -177,16 +243,23 @@ function loadReasoningCache() {
 let saveReasoningTimer = null;
 let reasoningCacheDirty = false;
 
-function reasoningCachePayload() {
-  trimReasoningCaches();
+function reasoningCachePayloadObject() {
   return {
-    version: 1,
+    version: 2,
     note: "DeepSeek V4 reasoning_content cache for the OpenCode Go Claude Code bridge. It is required for thinking-mode tool-call history replay.",
+    updatedAt: Date.now(),
     maxEntriesPerBucket: CONFIG.reasoningCacheMaxEntries,
+    maxAgeMs: CONFIG.reasoningCacheMaxAgeMs,
+    maxSizeBytes: CONFIG.reasoningCacheMaxSizeBytes,
     toolCallReasoning: Object.fromEntries(reasoningByToolCallId.entries()),
     assistantTextReasoning: Object.fromEntries(reasoningByAssistantText.entries()),
     toolContextReasoning: Object.fromEntries(reasoningByToolContext.entries()),
   };
+}
+
+function reasoningCachePayload() {
+  trimReasoningCaches();
+  return reasoningCachePayloadObject();
 }
 
 function saveReasoningCacheNow() {
@@ -196,17 +269,6 @@ function saveReasoningCacheNow() {
     fs.mkdirSync(path.dirname(CONFIG.reasoningCachePath), { recursive: true });
     fs.writeFileSync(tmp, data, "utf8");
     fs.renameSync(tmp, CONFIG.reasoningCachePath);
-    const sizeBytes = Buffer.byteLength(data, "utf8");
-    if (
-      CONFIG.reasoningCacheWarnSizeBytes > 0 &&
-      sizeBytes > CONFIG.reasoningCacheWarnSizeBytes &&
-      !warnedReasoningCacheSize
-    ) {
-      warnedReasoningCacheSize = true;
-      console.warn(
-        `Reasoning cache is ${sizeBytes} bytes; consider archiving old Claude Code conversations or setting reasoningCacheMaxEntries.`,
-      );
-    }
     reasoningCacheDirty = false;
     return true;
   } catch (error) {
@@ -241,23 +303,73 @@ function trimMap(map) {
   }
 }
 
+function trimExpiredMap(map, now) {
+  for (const [key, entry] of map.entries()) {
+    if (isReasoningEntryExpired(entry, now)) map.delete(key);
+  }
+}
+
+function reasoningCacheSerializedSize() {
+  return Buffer.byteLength(JSON.stringify(reasoningCachePayloadObject()), "utf8");
+}
+
+function deleteOldestReasoningEntry() {
+  const candidates = [
+    { name: "tool", map: reasoningByToolCallId },
+    { name: "assistant", map: reasoningByAssistantText },
+    { name: "context", map: reasoningByToolContext },
+  ];
+  let oldest = null;
+  for (const candidate of candidates) {
+    for (const [key, entry] of candidate.map.entries()) {
+      if (!oldest || entry.updatedAt < oldest.entry.updatedAt) {
+        oldest = { ...candidate, key, entry };
+      }
+    }
+  }
+  if (!oldest) return false;
+  oldest.map.delete(oldest.key);
+  return true;
+}
+
+function trimReasoningCacheSize() {
+  const maxSizeBytes = CONFIG.reasoningCacheMaxSizeBytes;
+  if (!Number.isFinite(maxSizeBytes) || maxSizeBytes <= 0) return;
+  while (reasoningCacheSerializedSize() > maxSizeBytes) {
+    if (!deleteOldestReasoningEntry()) return;
+  }
+}
+
 function trimReasoningCaches() {
+  const now = Date.now();
+  trimExpiredMap(reasoningByToolCallId, now);
+  trimExpiredMap(reasoningByAssistantText, now);
+  trimExpiredMap(reasoningByToolContext, now);
   trimMap(reasoningByToolCallId);
   trimMap(reasoningByAssistantText);
   trimMap(reasoningByToolContext);
+  trimReasoningCacheSize();
 }
 
-function setMapRecent(map, key, value) {
+function setMapRecent(map, key, value, options = {}) {
+  const entry = normalizeReasoningEntry(value);
+  if (!entry) return;
+  if (options.touch !== false) entry.updatedAt = Date.now();
   if (map.has(key)) map.delete(key);
-  map.set(key, value);
+  map.set(key, entry);
   trimMap(map);
 }
 
 function getMapRecent(map, key) {
   if (!map.has(key)) return null;
-  const value = map.get(key);
-  setMapRecent(map, key, value);
-  return value;
+  const entry = map.get(key);
+  if (isReasoningEntryExpired(entry)) {
+    map.delete(key);
+    scheduleSaveReasoningCache();
+    return null;
+  }
+  setMapRecent(map, key, entry);
+  return entry.reasoning;
 }
 
 function setToolReasoning(id, reasoning) {

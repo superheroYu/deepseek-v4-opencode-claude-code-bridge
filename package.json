@@ -1,6 +1,6 @@
 {
   "name": "deepseek-v4-opencode-claude-code-bridge",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek V4 on OpenCode Go compatibility bridge for Claude Code.",
   "main": "server.js",
   "scripts": {

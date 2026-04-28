@@ -108,10 +108,11 @@ Default config:
   ],
   "reasoningContent": "auto",
   "reasoningCacheMaxEntries": 0,
+  "reasoningCacheMaxAgeMs": 2592000000,
+  "reasoningCacheMaxSizeBytes": 10485760,
   "reasoningCachePath": "~/.claude/deepseek-v4-opencode-claude-code-bridge-reasoning-cache.json",
   "requestBodyLimitBytes": 104857600,
-  "upstreamTimeoutMs": 600000,
-  "reasoningCacheWarnSizeBytes": 10485760
+  "upstreamTimeoutMs": 600000
 }
 ```
 
@@ -127,15 +128,21 @@ Fields:
 - `reasoningContent`: `auto`, `always`, or `never`. Keep `auto` for OpenCode Go.
   It replays DeepSeek reasoning history only for DeepSeek model names.
 - `reasoningCacheMaxEntries`: maximum entries to keep in each reasoning cache
-  bucket. The default `0` disables automatic trimming, which is safest for old
-  Claude Code conversations that may still contain DeepSeek tool-call history.
+  bucket. The default `0` disables count-based trimming.
+- `reasoningCacheMaxAgeMs`: maximum age for a cache entry since its last use.
+  The default is 30 days. Set `0` to disable age-based trimming.
+- `reasoningCacheMaxSizeBytes`: maximum serialized cache file size. The default
+  is 10 MB. When the cache exceeds this size, the oldest entries are removed.
 - `reasoningCachePath`: local DeepSeek reasoning cache path.
 - `requestBodyLimitBytes`: maximum accepted request body size. The default is
   100 MB.
 - `upstreamTimeoutMs`: maximum time to wait for an upstream OpenCode Go request
   before aborting it. The default is 10 minutes.
-- `reasoningCacheWarnSizeBytes`: warning threshold for the reasoning cache file.
-  The default is 10 MB. Set `0` to disable the warning.
+
+The default model uses the `deepseek-v4-pro[1m]` 1M-context variant. If your
+OpenCode Go plan does not include that variant, replace every
+`deepseek-v4-pro[1m]` value in `config.json` and Claude Code settings with
+`deepseek-v4-pro`.
 
 ## Start
 
@@ -311,7 +318,13 @@ node --test
 - `reasoning_content must be passed back`: keep the reasoning cache file, restart
   the bridge with the same cache path, and avoid trimming old entries too
   aggressively. If the conversation history still contains old DeepSeek tool
-  calls but the cache was deleted, start a fresh Claude Code session.
+  calls but the cache was deleted, the bridge can only send a compatibility
+  placeholder for missing reasoning. That avoids a hard request failure but may
+  reduce continuation quality; start a fresh Claude Code session when possible.
+- Reasoning cache is trimmed unexpectedly: by default, entries unused for 30
+  days expire and the serialized cache is capped at 10 MB. Increase
+  `reasoningCacheMaxAgeMs` or `reasoningCacheMaxSizeBytes`, or set either value
+  to `0` to disable that dimension.
 - `401` or `403` from OpenCode Go: verify that Claude Code settings use
   `ANTHROPIC_API_KEY` with your OpenCode Go key. Do not use
   `ANTHROPIC_AUTH_TOKEN` for this bridge, and remove conflicting global Claude
@@ -353,10 +366,14 @@ The cache is designed to cover the cases that can still be recovered:
 - If the cache was deleted, manually trimmed, or created by a different proxy instance,
   old DeepSeek tool-call history may fall back to a compatibility placeholder.
 
-For long-running work, keep the reasoning cache enabled. If you choose to set a
-non-zero `reasoningCacheMaxEntries`, use a high value and understand that the
-proxy cannot know about Claude Code conversations that are not currently being
-sent to it.
+For long-running work, keep the reasoning cache enabled and size the cache
+limits for your expected session lifetime. The proxy cannot know about Claude
+Code conversations that are not currently being sent to it, so entries that
+expire by age, size, or count may not be recoverable later.
+
+Cache files written by v0.2.1 and newer use schema version 2 with per-entry
+timestamps. Older bridge versions can still start with that file, but they will
+ignore v2 cache entries.
 
 ## Why This Exists
 
