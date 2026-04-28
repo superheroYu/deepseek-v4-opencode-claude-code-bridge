@@ -24,7 +24,7 @@ test("anthropicToOpenAi converts messages, tools, and DeepSeek reasoning", () =>
 
   const payload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       system: "You are concise.",
       max_tokens: 128,
       messages: [
@@ -68,7 +68,7 @@ test("anthropicToOpenAi converts messages, tools, and DeepSeek reasoning", () =>
     false,
   );
 
-  assert.equal(payload.model, "deepseek-v4-pro");
+  assert.equal(payload.model, "deepseek-v4-pro[1m]");
   assert.equal(payload.stream, false);
   assert.equal(payload.messages[0].role, "system");
   assert.match(payload.messages[0].content, /You are concise/);
@@ -86,7 +86,7 @@ test("openAiToAnthropic converts text and tool calls", () => {
   const message = bridge.openAiToAnthropic(
     {
       id: "chatcmpl_1",
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       choices: [
         {
           finish_reason: "tool_calls",
@@ -109,7 +109,7 @@ test("openAiToAnthropic converts text and tool calls", () => {
       ],
       usage: { prompt_tokens: 10, completion_tokens: 5 },
     },
-    "deepseek-v4-pro",
+    "deepseek-v4-pro[1m]",
   );
 
   assert.equal(message.id, "chatcmpl_1");
@@ -221,7 +221,7 @@ test("streamOpenAiAsAnthropic emits message_stop and usage", async () => {
     },
   };
 
-  await bridge.streamOpenAiAsAnthropic({ body: body() }, res, "deepseek-v4-pro");
+  await bridge.streamOpenAiAsAnthropic({ body: body() }, res, "deepseek-v4-pro[1m]");
 
   const output = writes.join("");
   assert.equal(res.status, 200);
@@ -261,7 +261,7 @@ test("createServer returns 400 for malformed JSON", async () => {
 test("tool_choice auto is passed through while DeepSeek forced tool choice is softened", () => {
   const autoPayload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       messages: [{ role: "user", content: "hi" }],
       tool_choice: { type: "auto" },
     },
@@ -286,7 +286,7 @@ test("tool_choice auto is passed through while DeepSeek forced tool choice is so
 test("Claude Code thinking and effort fields are translated from the request body", () => {
   const payload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       messages: [{ role: "user", content: "think deeply" }],
       thinking: { type: "enabled", budget_tokens: 4096 },
       output_config: { effort: "max" },
@@ -299,7 +299,7 @@ test("Claude Code thinking and effort fields are translated from the request bod
 
   const highPayload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       messages: [{ role: "user", content: "think" }],
       output_config: { effort: "xhigh" },
     },
@@ -327,7 +327,7 @@ test("thinking and reasoning_effort are not sent to non-DeepSeek models", () => 
 test("Claude Code thinking blocks are restored as DeepSeek reasoning_content", () => {
   const payload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       messages: [
         {
           role: "assistant",
@@ -356,7 +356,7 @@ test("Claude Code thinking blocks are restored as DeepSeek reasoning_content", (
 test("assistant content is null when a tool call has no text", () => {
   const payload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       messages: [
         {
           role: "assistant",
@@ -399,7 +399,7 @@ test("reasoning cache persists tool reasoning across reload", () => {
 test("DeepSeek tool_choice any is softened to a system instruction", () => {
   const payload = bridge.anthropicToOpenAi(
     {
-      model: "deepseek-v4-pro",
+      model: "deepseek-v4-pro[1m]",
       messages: [{ role: "user", content: "Use a tool." }],
       tool_choice: { type: "any" },
     },
@@ -435,7 +435,7 @@ test("streamOpenAiAsAnthropic marks interrupted streams", async () => {
     },
   };
 
-  await bridge.streamOpenAiAsAnthropic({ body: body() }, res, "deepseek-v4-pro");
+  await bridge.streamOpenAiAsAnthropic({ body: body() }, res, "deepseek-v4-pro[1m]");
 
   const output = writes.join("");
   assert.match(output, /partial/);

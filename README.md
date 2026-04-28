@@ -103,7 +103,7 @@ Default config:
     "baseUrl": "https://opencode.ai/zen/go/v1"
   },
   "models": [
-    "deepseek-v4-pro",
+    "deepseek-v4-pro[1m]",
     "deepseek-v4-flash"
   ],
   "reasoningContent": "auto",
@@ -189,15 +189,15 @@ Create a Claude Code settings file, for example
     "API_TIMEOUT_MS": "3000000",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-    "ANTHROPIC_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
     "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro[1m]",
     "CLAUDE_CODE_EFFORT_LEVEL": "max"
   },
-  "model": "deepseek-v4-pro"
+  "model": "deepseek-v4-pro[1m]"
 }
 ```
 
@@ -271,7 +271,7 @@ To experiment with another `/v1/chat/completions` Go model, add its model ID to
 }
 ```
 
-Use the raw Go API model IDs, such as `deepseek-v4-pro` or `kimi-k2.6`, not the
+Use the raw Go API model IDs, such as `deepseek-v4-pro[1m]` or `kimi-k2.6`, not the
 OpenCode app prefix `opencode-go/<model-id>`. Non-DeepSeek models should be
 considered best-effort until their function-calling behavior has been tested.
 
@@ -388,7 +388,7 @@ interface:
 - `glm-5`
 - `kimi-k2.6`
 - `kimi-k2.5`
-- `deepseek-v4-pro`
+- `deepseek-v4-pro[1m]`
 - `deepseek-v4-flash`
 - `mimo-v2-pro`
 - `mimo-v2-omni`
@@ -405,7 +405,7 @@ To try an experimental non-DeepSeek model, add it to `config.json`:
 ```json
 {
   "models": [
-    "deepseek-v4-pro",
+    "deepseek-v4-pro[1m]",
     "deepseek-v4-flash",
     "kimi-k2.6"
   ],

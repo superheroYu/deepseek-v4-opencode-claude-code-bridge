@@ -5,7 +5,7 @@ const os = require("os");
 const path = require("path");
 
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1";
-const DEFAULT_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
+const DEFAULT_MODELS = ["deepseek-v4-pro[1m]", "deepseek-v4-flash"];
 const DEFAULT_REASONING_CACHE_PATH = path.join(
   os.homedir(),
   ".claude",
