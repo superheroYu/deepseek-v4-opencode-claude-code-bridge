@@ -216,10 +216,17 @@ CLAUDE_OPENCODE_PROXY_CONFIG=./config.json node server.js
 项目内置了用户级自启动脚本。它们不会保存 API key；bridge 仍然从 Claude Code 请求里接收
 OpenCode Go key。
 
-Windows 使用当前用户的计划任务，在用户登录后启动:
+Windows 会优先尝试使用当前用户的计划任务，在用户登录后启动。如果 Task Scheduler
+拒绝注册任务，脚本会自动退回到当前用户的“启动”文件夹快捷方式:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1
+```
+
+如果你已经知道当前机器上计划任务会被拒绝，可以直接使用“启动”文件夹模式:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1 -Mode StartupShortcut
 ```
 
 取消自启动:

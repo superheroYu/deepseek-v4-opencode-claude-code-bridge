@@ -569,3 +569,13 @@ test("invalid numeric config fails with a clear error", () => {
     require("../server.js");
   }
 });
+
+test("Linux autostart service writes unquoted systemd WorkingDirectory", () => {
+  const script = fs.readFileSync(
+    path.join(__dirname, "..", "scripts", "install-autostart-linux.sh"),
+    "utf8",
+  );
+
+  assert.match(script, /WorkingDirectory=\$\(escape_systemd_path "\$REPO_DIR"\)/);
+  assert.doesNotMatch(script, /WorkingDirectory="\$\(escape_systemd_arg "\$REPO_DIR"\)"/);
+});

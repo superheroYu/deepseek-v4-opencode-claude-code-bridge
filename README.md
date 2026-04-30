@@ -231,11 +231,19 @@ CLAUDE_OPENCODE_PROXY_CONFIG=./config.json node server.js
 The repository includes user-level autostart helpers. They do not store API
 keys; the bridge still receives the OpenCode Go key from Claude Code requests.
 
-Windows uses a per-user Scheduled Task that starts when the current user logs
-in:
+Windows first tries to use a per-user Scheduled Task that starts when the
+current user logs in. If Task Scheduler rejects the registration, the script
+falls back to a shortcut in the current user's Startup folder:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1
+```
+
+If you already know Task Scheduler is blocked on your machine, use the Startup
+folder mode directly:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1 -Mode StartupShortcut
 ```
 
 Disable it with:

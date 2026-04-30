@@ -26,6 +26,10 @@ escape_systemd_arg() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g'
 }
 
+escape_systemd_path() {
+  printf '%s' "$1" | sed 's/%/%%/g'
+}
+
 mkdir -p "$SERVICE_DIR"
 
 cat > "$SERVICE_PATH" <<EOF
@@ -36,7 +40,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory="$(escape_systemd_arg "$REPO_DIR")"
+WorkingDirectory=$(escape_systemd_path "$REPO_DIR")
 ExecStart="$(escape_systemd_arg "$NODE_BIN")" "$(escape_systemd_arg "$REPO_DIR/server.js")" --config "$(escape_systemd_arg "$CONFIG_PATH")"
 Restart=on-failure
 RestartSec=5
