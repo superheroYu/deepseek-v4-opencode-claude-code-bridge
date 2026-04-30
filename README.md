@@ -183,6 +183,70 @@ or:
 CLAUDE_OPENCODE_PROXY_CONFIG=./config.json node server.js
 ```
 
+## Autostart
+
+The repository includes user-level autostart helpers. They do not store API
+keys; the bridge still receives the OpenCode Go key from Claude Code requests.
+
+Windows uses a per-user Scheduled Task that starts when the current user logs
+in:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1
+```
+
+Disable it with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-autostart-windows.ps1
+```
+
+Linux uses a `systemd --user` service:
+
+```bash
+chmod +x ./scripts/*.sh
+./scripts/install-autostart-linux.sh
+systemctl --user status deepseek-v4-opencode-claude-code-bridge.service
+```
+
+Disable it with:
+
+```bash
+./scripts/uninstall-autostart-linux.sh
+```
+
+A user service normally starts after the user session exists. If you need it to
+start at boot before login, enable lingering manually:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+macOS uses a user LaunchAgent:
+
+```bash
+chmod +x ./scripts/*.sh
+./scripts/install-autostart-macos.sh
+```
+
+Disable it with:
+
+```bash
+./scripts/uninstall-autostart-macos.sh
+```
+
+To use a non-default config path, pass `-ConfigPath` on Windows or set
+`CONFIG_PATH` on Linux/macOS:
+
+```powershell
+.\scripts\install-autostart-windows.ps1 -ConfigPath "D:\path\config.json"
+```
+
+```bash
+CONFIG_PATH=/path/to/config.json ./scripts/install-autostart-linux.sh
+CONFIG_PATH=/path/to/config.json ./scripts/install-autostart-macos.sh
+```
+
 ## Claude Code Settings
 
 Create a Claude Code settings file, for example

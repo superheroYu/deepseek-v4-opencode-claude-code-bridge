@@ -6,7 +6,13 @@
   "scripts": {
     "start": "node server.js --config ./config.json",
     "check": "node --check server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "autostart:install:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-autostart-windows.ps1",
+    "autostart:uninstall:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-autostart-windows.ps1",
+    "autostart:install:linux": "sh scripts/install-autostart-linux.sh",
+    "autostart:uninstall:linux": "sh scripts/uninstall-autostart-linux.sh",
+    "autostart:install:macos": "sh scripts/install-autostart-macos.sh",
+    "autostart:uninstall:macos": "sh scripts/uninstall-autostart-macos.sh"
   },
   "keywords": [
     "claude-code",

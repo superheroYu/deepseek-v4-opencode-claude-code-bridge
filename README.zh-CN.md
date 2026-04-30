@@ -174,6 +174,68 @@ node server.js --config ./config.json
 CLAUDE_OPENCODE_PROXY_CONFIG=./config.json node server.js
 ```
 
+## 开机自启动
+
+项目内置了用户级自启动脚本。它们不会保存 API key；bridge 仍然从 Claude Code 请求里接收
+OpenCode Go key。
+
+Windows 使用当前用户的计划任务，在用户登录后启动:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1
+```
+
+取消自启动:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-autostart-windows.ps1
+```
+
+Linux 使用 `systemd --user` 服务:
+
+```bash
+chmod +x ./scripts/*.sh
+./scripts/install-autostart-linux.sh
+systemctl --user status deepseek-v4-opencode-claude-code-bridge.service
+```
+
+取消自启动:
+
+```bash
+./scripts/uninstall-autostart-linux.sh
+```
+
+用户级 systemd 服务通常会在用户会话存在后启动。如果你希望它在开机后、用户未登录时也启动，
+需要手动开启 linger:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+macOS 使用用户级 LaunchAgent:
+
+```bash
+chmod +x ./scripts/*.sh
+./scripts/install-autostart-macos.sh
+```
+
+取消自启动:
+
+```bash
+./scripts/uninstall-autostart-macos.sh
+```
+
+如果要使用非默认配置文件路径，Windows 传 `-ConfigPath`，Linux/macOS 设置 `CONFIG_PATH`:
+
+```powershell
+.\scripts\install-autostart-windows.ps1 -ConfigPath "D:\path\config.json"
+```
+
+```bash
+CONFIG_PATH=/path/to/config.json ./scripts/install-autostart-linux.sh
+CONFIG_PATH=/path/to/config.json ./scripts/install-autostart-macos.sh
+```
+
 ## Claude Code Settings
 
 创建 Claude Code settings 文件，例如 `~/.claude/settings.opencode-proxy.json`。
