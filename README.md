@@ -120,6 +120,25 @@ key rotation, or a dashboard. Use this bridge if your main problem is: "Claude
 Code cannot reliably use OpenCode Go DeepSeek V4, especially after tool calls or
 thinking-mode history."
 
+## Compared With oc-go-cc
+
+[`oc-go-cc`](https://github.com/samueltuyizere/oc-go-cc) is closer to this
+project than broad gateways such as LiteLLM or New API: it is also an OpenCode
+Go -> Claude Code proxy, and it also translates Anthropic Messages requests to
+OpenAI-style chat-completions requests.
+
+The main difference is focus. Choose `oc-go-cc` if you want a broader OpenCode
+Go backend manager for Claude Code: model routing, fallback chains, token
+thresholds, packaged CLI/background operation, and wider model coverage.
+
+Choose this bridge if your concrete failure is DeepSeek V4's
+`reasoning_content must be passed back` behavior after tool calls, continued
+sessions, or Claude Code history compaction. It performs the same core
+thinking/reasoning protocol mapping, but adds a persistent local
+`reasoning_content` cache and replay by tool call ID, assistant text hash, and
+recent tool context. It is narrower by design: zero-dependency Node.js, focused
+on DeepSeek V4 Pro/Flash, and MIT licensed.
+
 ## Requirements
 
 - Node.js 18 or newer.
@@ -605,6 +624,9 @@ To try an experimental non-DeepSeek model, add it to `config.json`:
   upstreams.
 - [ccNexus](https://github.com/lich0821/ccNexus) - a general Claude Code/Codex
   API gateway with endpoint rotation and multi-format conversion.
+- [oc-go-cc](https://github.com/samueltuyizere/oc-go-cc) - an OpenCode Go
+  proxy for Claude Code with model routing, fallback chains, and DeepSeek V4
+  thinking/reasoning-content protocol mapping.
 - [LiteLLM](https://github.com/BerriAI/litellm) - a general AI gateway for many
   LLM providers using OpenAI-compatible interfaces.
 - [New API](https://github.com/QuantumNous/new-api) - a general model
