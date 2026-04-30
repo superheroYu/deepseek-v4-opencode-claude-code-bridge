@@ -73,13 +73,34 @@ public sealed class BridgeMenuRenderer : ToolStripProfessionalRenderer {
 }
 "@
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoDir = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ($PSScriptRoot) {
+  $scriptDir = $PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+  $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+} else {
+  $scriptDir = (Get-Location).Path
+}
+$repoDir = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
+
+function Resolve-BridgePath {
+  param(
+    [string]$Value,
+    [string]$BaseDir
+  )
+
+  if ([System.IO.Path]::IsPathRooted($Value)) {
+    return [System.IO.Path]::GetFullPath($Value)
+  }
+
+  return [System.IO.Path]::GetFullPath((Join-Path $BaseDir $Value))
+}
 
 if (-not $ConfigPath) {
   $ConfigPath = Join-Path $repoDir "config.json"
+  $ConfigPath = Resolve-BridgePath $ConfigPath $repoDir
+} else {
+  $ConfigPath = Resolve-BridgePath $ConfigPath (Get-Location).Path
 }
-$ConfigPath = (Resolve-Path $ConfigPath).Path
 
 if (-not $NodePath) {
   $nodeCommand = Get-Command node -ErrorAction Stop
@@ -126,9 +147,12 @@ function Trim-ReasoningCacheToHalf {
   $startInfo.CreateNoWindow = $true
 
   $process = [System.Diagnostics.Process]::Start($startInfo)
+  while (-not $process.HasExited) {
+    [System.Windows.Forms.Application]::DoEvents()
+    Start-Sleep -Milliseconds 50
+  }
   $stdout = $process.StandardOutput.ReadToEnd()
   $stderr = $process.StandardError.ReadToEnd()
-  $process.WaitForExit()
 
   $result = $null
   if ($stdout.Trim()) {
@@ -167,8 +191,22 @@ function Start-Bridge {
 
 function Stop-Bridge {
   if ($script:bridgeProcess -and -not $script:bridgeProcess.HasExited) {
-    Stop-Process -Id $script:bridgeProcess.Id -Force
-    $script:bridgeProcess.WaitForExit(3000) | Out-Null
+    try {
+      $shutdownUrl = $healthUrl -replace "/health$", "/shutdown"
+      Invoke-WebRequest -Uri $shutdownUrl -Method Post -UseBasicParsing -TimeoutSec 2 | Out-Null
+    } catch {
+      # Fall back to terminating the child process below.
+    }
+
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(2000)
+    while (-not $script:bridgeProcess.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+      [System.Windows.Forms.Application]::DoEvents()
+      Start-Sleep -Milliseconds 50
+    }
+
+    if (-not $script:bridgeProcess.HasExited) {
+      Stop-Process -Id $script:bridgeProcess.Id -Force
+    }
   }
 }
 

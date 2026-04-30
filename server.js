@@ -853,6 +853,20 @@ function normalizeUpstreamError(error, upstreamContext) {
   return error;
 }
 
+function isLoopbackAddress(address) {
+  const normalized = String(address || "").replace(/^::ffff:/, "");
+  return normalized === "::1" || normalized === "localhost" || normalized.startsWith("127.");
+}
+
+function requestProcessShutdown(server) {
+  setImmediate(() => {
+    console.log("Received local shutdown request; flushing reasoning cache and shutting down.");
+    flushReasoningCache();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+  });
+}
+
 async function callOpenCode(req, payload, upstreamContext) {
   const upstreamApiKey = requestAuthToken(req);
   if (!upstreamApiKey) {
@@ -1261,7 +1275,7 @@ async function handleChatCompletions(req, res) {
 }
 
 function createServer() {
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     const startedAt = Date.now();
     res.on("finish", () => logRequest(req, res, startedAt));
 
@@ -1289,6 +1303,16 @@ function createServer() {
           body.upstream_probe = await probeUpstream(req);
         }
         sendJson(res, 200, body);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/shutdown") {
+        if (!isLoopbackAddress(req.socket.remoteAddress)) {
+          sendError(res, 403, "Shutdown is only allowed from a local loopback client.", "forbidden_error");
+          return;
+        }
+        sendJson(res, 200, { ok: true, shutting_down: true });
+        requestProcessShutdown(server);
         return;
       }
 
@@ -1322,6 +1346,7 @@ function createServer() {
       }
     }
   });
+  return server;
 }
 
 function installShutdownHandlers(server) {

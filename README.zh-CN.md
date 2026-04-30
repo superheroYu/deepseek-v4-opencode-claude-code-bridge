@@ -241,7 +241,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-
 
 托盘启动器提供打开 `/health`、把 reasoning cache 裁剪到 `reasoningCacheMaxSizeBytes`
 一半、重启 bridge、退出 bridge 的右键菜单。清理 cache 时会先停止 bridge，修改 cache
-文件后再重启，避免运行中的内存 cache 把裁剪后的文件覆盖回去。裁剪动作由
+文件后再重启，避免运行中的内存 cache 把裁剪后的文件覆盖回去。重启和清理会优先通过
+只允许本机回环访问的 `/shutdown` 端点让 bridge 自行退出，超时后才会强制停止子进程。
+裁剪动作由
 `scripts/trim-reasoning-cache.js` 执行，所以大 cache 文件会交给 Node.js 解析和写回，
 不会由 PowerShell 直接处理。Windows 托盘图标会优先使用
 `assets/app-icon.ico`，`assets/app-icon.png` 作为源 PNG 保留。托盘菜单会跟随 Windows

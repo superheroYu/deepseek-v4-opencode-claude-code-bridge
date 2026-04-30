@@ -581,6 +581,27 @@ test("Linux autostart service writes unquoted systemd WorkingDirectory", () => {
   assert.doesNotMatch(script, /WorkingDirectory="\$\(escape_systemd_arg "\$REPO_DIR"\)"/);
 });
 
+function runTrimHelper(configPath, ratio = "0.5") {
+  const childEnv = { ...process.env };
+  delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE;
+  delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES;
+
+  return spawnSync(
+    process.execPath,
+    [
+      path.join(__dirname, "..", "scripts", "trim-reasoning-cache.js"),
+      "--config",
+      configPath,
+      "--ratio",
+      ratio,
+    ],
+    {
+      encoding: "utf8",
+      env: childEnv,
+    },
+  );
+}
+
 test("trim-reasoning-cache helper trims cache to half of configured max size", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-trim-"));
   const trimCachePath = path.join(tempDir, "cache.json");
@@ -591,7 +612,7 @@ test("trim-reasoning-cache helper trims cache to half of configured max size", (
       trimConfigPath,
       JSON.stringify({
         reasoningCachePath: trimCachePath,
-        reasoningCacheMaxSizeBytes: 900,
+        reasoningCacheMaxSizeBytes: 2000,
       }),
       "utf8",
     );
@@ -616,24 +637,7 @@ test("trim-reasoning-cache helper trims cache to half of configured max size", (
       "utf8",
     );
 
-    const childEnv = { ...process.env };
-    delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE;
-    delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES;
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.join(__dirname, "..", "scripts", "trim-reasoning-cache.js"),
-        "--config",
-        trimConfigPath,
-        "--ratio",
-        "0.5",
-      ],
-      {
-        encoding: "utf8",
-        env: childEnv,
-      },
-    );
+    const result = runTrimHelper(trimConfigPath);
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const output = JSON.parse(result.stdout);
@@ -644,6 +648,79 @@ test("trim-reasoning-cache helper trims cache to half of configured max size", (
     const cache = JSON.parse(fs.readFileSync(trimCachePath, "utf8"));
     assert.equal(cache.toolCallReasoning.oldest, undefined);
     assert.equal(cache.toolCallReasoning.newest.reasoning, "y".repeat(100));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("trim-reasoning-cache helper succeeds when cache file is missing", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-missing-"));
+  const trimCachePath = path.join(tempDir, "missing-cache.json");
+  const trimConfigPath = path.join(tempDir, "config.json");
+
+  try {
+    fs.writeFileSync(
+      trimConfigPath,
+      JSON.stringify({
+        reasoningCachePath: trimCachePath,
+        reasoningCacheMaxSizeBytes: 900,
+      }),
+      "utf8",
+    );
+
+    const result = runTrimHelper(trimConfigPath);
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.message, "Cache file not found.");
+    assert.equal(output.removedEntries, 0);
+    assert.equal(fs.existsSync(trimCachePath), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("trim-reasoning-cache helper leaves small caches untouched", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-small-"));
+  const trimCachePath = path.join(tempDir, "cache.json");
+  const trimConfigPath = path.join(tempDir, "config.json");
+
+  try {
+    fs.writeFileSync(
+      trimConfigPath,
+      JSON.stringify({
+        reasoningCachePath: trimCachePath,
+        reasoningCacheMaxSizeBytes: 10000,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      trimCachePath,
+      JSON.stringify(
+        {
+          version: 2,
+          updatedAt: 123,
+          toolCallReasoning: {
+            keep: { reasoning: "small", updatedAt: 1 },
+          },
+          assistantTextReasoning: {},
+          toolContextReasoning: {},
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const before = fs.readFileSync(trimCachePath, "utf8");
+
+    const result = runTrimHelper(trimConfigPath, "1");
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.equal(output.removedEntries, 0);
+    assert.equal(fs.readFileSync(trimCachePath, "utf8"), before);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

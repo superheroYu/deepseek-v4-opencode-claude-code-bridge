@@ -261,6 +261,9 @@ The tray launcher provides a small menu for opening `/health`, trimming the
 reasoning cache to half of `reasoningCacheMaxSizeBytes`, restarting the bridge,
 or exiting it. Cache trimming stops the bridge first, edits the cache file, then
 starts the bridge again so the in-memory cache cannot overwrite the trimmed file.
+Restart and trim actions first ask the local bridge to shut down through its
+loopback-only `/shutdown` endpoint and only force-stop the child process if it
+does not exit in time.
 The trim action is handled by `scripts/trim-reasoning-cache.js`, so large cache
 files are parsed and written by Node.js instead of PowerShell.
 Its Windows tray icon is loaded from `assets/app-icon.ico` with

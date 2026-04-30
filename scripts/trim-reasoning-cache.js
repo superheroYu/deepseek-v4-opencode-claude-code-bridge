@@ -117,20 +117,72 @@ function entryUpdatedAt(value) {
   return Number.isFinite(updatedAt) ? updatedAt : 0;
 }
 
-function oldestReasoningEntry(cache) {
-  let oldest = null;
+function estimatedEntrySize(key, value) {
+  return Buffer.byteLength(`${JSON.stringify(key)}:${JSON.stringify(value)},`, "utf8");
+}
+
+function reasoningEntriesByAge(cache) {
+  const entries = [];
   for (const bucketName of REASONING_BUCKETS) {
     const bucket = cache[bucketName];
     if (!bucket || typeof bucket !== "object") continue;
 
     for (const [key, value] of Object.entries(bucket)) {
-      const updatedAt = entryUpdatedAt(value);
-      if (!oldest || updatedAt < oldest.updatedAt) {
-        oldest = { bucketName, key, updatedAt };
-      }
+      entries.push({
+        bucketName,
+        key,
+        updatedAt: entryUpdatedAt(value),
+        estimatedBytes: estimatedEntrySize(key, value),
+      });
     }
   }
-  return oldest;
+  return entries.sort((a, b) => a.updatedAt - b.updatedAt);
+}
+
+function deleteEntry(cache, entry) {
+  if (cache[entry.bucketName] && typeof cache[entry.bucketName] === "object") {
+    delete cache[entry.bucketName][entry.key];
+  }
+}
+
+function trimCacheToTargetSize(cache, targetSizeBytes, beforeSizeBytes) {
+  if (beforeSizeBytes <= targetSizeBytes) {
+    return {
+      afterSizeBytes: beforeSizeBytes,
+      removedEntries: 0,
+    };
+  }
+
+  const entries = reasoningEntriesByAge(cache);
+  let removedEntries = 0;
+  let estimatedRemovedBytes = 0;
+  const safetyPaddingBytes = Math.min(64 * 1024, Math.floor(targetSizeBytes * 0.01));
+  const firstPassTarget = Math.max(0, beforeSizeBytes - targetSizeBytes) + safetyPaddingBytes;
+
+  while (removedEntries < entries.length && estimatedRemovedBytes < firstPassTarget) {
+    const entry = entries[removedEntries];
+    deleteEntry(cache, entry);
+    estimatedRemovedBytes += entry.estimatedBytes;
+    removedEntries += 1;
+  }
+
+  let currentSizeBytes = serializedSize(cache);
+  while (currentSizeBytes > targetSizeBytes && removedEntries < entries.length) {
+    const remainingBytes = currentSizeBytes - targetSizeBytes;
+    let batchBytes = 0;
+    while (removedEntries < entries.length && batchBytes < remainingBytes + safetyPaddingBytes) {
+      const entry = entries[removedEntries];
+      deleteEntry(cache, entry);
+      batchBytes += entry.estimatedBytes;
+      removedEntries += 1;
+    }
+    currentSizeBytes = serializedSize(cache);
+  }
+
+  return {
+    afterSizeBytes: currentSizeBytes,
+    removedEntries,
+  };
 }
 
 function writeJsonAtomic(file, value) {
@@ -176,32 +228,27 @@ function trimReasoningCache() {
   }
 
   const beforeSizeBytes = serializedSize(cache);
-  let currentSizeBytes = beforeSizeBytes;
-  let removedEntries = 0;
-
-  while (currentSizeBytes > targetSizeBytes) {
-    const oldest = oldestReasoningEntry(cache);
-    if (!oldest) break;
-    delete cache[oldest.bucketName][oldest.key];
-    removedEntries += 1;
-    currentSizeBytes = serializedSize(cache);
-  }
+  let { afterSizeBytes, removedEntries } = trimCacheToTargetSize(
+    cache,
+    targetSizeBytes,
+    beforeSizeBytes,
+  );
 
   if (removedEntries > 0) {
     cache.version = 2;
     cache.updatedAt = Date.now();
     cache.maxSizeBytes = maxSizeBytes;
-    currentSizeBytes = serializedSize(cache);
-    while (currentSizeBytes > targetSizeBytes) {
-      const oldest = oldestReasoningEntry(cache);
-      if (!oldest) break;
-      delete cache[oldest.bucketName][oldest.key];
-      removedEntries += 1;
-      currentSizeBytes = serializedSize(cache);
+    afterSizeBytes = serializedSize(cache);
+
+    // Metadata updates are tiny, but they can push very small test caches back
+    // over the target. Delete one final estimated batch if that happens.
+    if (afterSizeBytes > targetSizeBytes) {
+      const finalTrim = trimCacheToTargetSize(cache, targetSizeBytes, afterSizeBytes);
+      afterSizeBytes = finalTrim.afterSizeBytes;
+      removedEntries += finalTrim.removedEntries;
     }
     writeJsonAtomic(cachePath, cache);
   }
-  const afterSizeBytes = serializedSize(cache);
 
   return {
     ok: true,
