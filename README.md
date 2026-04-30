@@ -77,6 +77,49 @@ Not a full Anthropic API implementation:
 - This is a compatibility bridge, not a replacement for a native Anthropic
   endpoint.
 
+## Why Not a General Gateway?
+
+General-purpose proxy projects such as ccNexus, LiteLLM, New API, One API, and
+similar routers are useful when you need multi-provider management, endpoint
+rotation, quota control, dashboards, virtual keys, or a unified OpenAI-compatible
+gateway. They are broader tools.
+
+This project is intentionally narrower. It focuses on the specific protocol
+edge cases needed to run OpenCode Go DeepSeek V4 as a Claude Code backend.
+
+| Area | General conversion gateways | This bridge |
+| --- | --- | --- |
+| Primary goal | Route or normalize many providers and API formats | Make OpenCode Go DeepSeek V4 usable inside Claude Code |
+| Scope | Broad multi-provider gateway behavior | Focused Anthropic Messages -> OpenAI chat-completions bridge |
+| DeepSeek V4 `reasoning_content` replay | Not usually the central design goal | Core feature with local cache and replay |
+| Claude Code thinking display | Depends on the gateway and model path | Converts DeepSeek reasoning deltas into Anthropic-compatible thinking blocks |
+| Tool-call history | Generic tool schema conversion | Preserves/reconstructs DeepSeek reasoning for Claude Code tool-call history |
+| Forced `tool_choice` | Often translated directly to OpenAI forced tool choice | Softened for DeepSeek/OpenCode Go compatibility when needed |
+| Deployment | Often a full gateway with management features | Single zero-dependency Node.js local bridge |
+
+The practical advantage is not that this bridge is more universal. It is that it
+handles DeepSeek V4's less common requirements:
+
+- **Reasoning replay**: DeepSeek thinking-mode tool-call history may require
+  previous `reasoning_content` to be sent back. The bridge caches and replays it
+  by tool call ID, assistant text hash, and recent tool context.
+- **Claude Code compaction survival**: when Claude Code keeps recent tool-call
+  blocks across compaction, the bridge can still recover matching DeepSeek
+  reasoning from the local cache.
+- **Visible thinking**: streaming DeepSeek `reasoning_content` is exposed to
+  Claude Code as `thinking` content blocks so the UI can show it.
+- **DeepSeek-aware extensions**: `thinking` and `reasoning_effort` are only sent
+  to DeepSeek model names, so experimental non-DeepSeek chat-completions models
+  are not polluted with DeepSeek-specific fields.
+- **OpenCode Go model IDs**: the default configuration follows OpenCode Go's
+  DeepSeek V4 model IDs, including `deepseek-v4-pro[1m]` and
+  `deepseek-v4-flash`.
+
+Use a general gateway if you mainly need provider aggregation, team management,
+key rotation, or a dashboard. Use this bridge if your main problem is: "Claude
+Code cannot reliably use OpenCode Go DeepSeek V4, especially after tool calls or
+thinking-mode history."
+
 ## Requirements
 
 - Node.js 18 or newer.
@@ -528,3 +571,9 @@ To try an experimental non-DeepSeek model, add it to `config.json`:
 - [OpenAI Chat API reference](https://developers.openai.com/api/reference/resources/chat) -
   the chat-completions-style request and response shape used by OpenAI-compatible
   upstreams.
+- [ccNexus](https://github.com/lich0821/ccNexus) - a general Claude Code/Codex
+  API gateway with endpoint rotation and multi-format conversion.
+- [LiteLLM](https://github.com/BerriAI/litellm) - a general AI gateway for many
+  LLM providers using OpenAI-compatible interfaces.
+- [New API](https://github.com/QuantumNous/new-api) - a general model
+  aggregation and distribution gateway with cross-format conversion.
