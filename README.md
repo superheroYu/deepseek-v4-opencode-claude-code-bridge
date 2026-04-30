@@ -246,6 +246,27 @@ folder mode directly:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1 -Mode StartupShortcut
 ```
 
+In Startup folder mode, the script uses `nodew.exe` when available. If Node.js
+does not provide `nodew.exe`, it uses `wscript.exe` plus
+`scripts/start-hidden-windows.vbs` so the bridge runs in the background without a
+console window. This does not create a tray icon.
+
+If you prefer a tray icon in the Windows notification area, use:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1 -Mode StartupTray
+```
+
+The tray launcher provides a small menu for opening `/health`, trimming the
+reasoning cache to half of `reasoningCacheMaxSizeBytes`, restarting the bridge,
+or exiting it. Cache trimming stops the bridge first, edits the cache file, then
+starts the bridge again so the in-memory cache cannot overwrite the trimmed file.
+The trim action is handled by `scripts/trim-reasoning-cache.js`, so large cache
+files are parsed and written by Node.js instead of PowerShell.
+Its Windows tray icon is loaded from `assets/app-icon.ico` with
+`assets/app-icon.png` kept as the source PNG. The tray menu follows the current
+Windows app light/dark theme and uses a modern Segoe UI font when available.
+
 Disable it with:
 
 ```powershell

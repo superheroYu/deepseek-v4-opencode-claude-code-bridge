@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -578,4 +579,72 @@ test("Linux autostart service writes unquoted systemd WorkingDirectory", () => {
 
   assert.match(script, /WorkingDirectory=\$\(escape_systemd_path "\$REPO_DIR"\)/);
   assert.doesNotMatch(script, /WorkingDirectory="\$\(escape_systemd_arg "\$REPO_DIR"\)"/);
+});
+
+test("trim-reasoning-cache helper trims cache to half of configured max size", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-cache-trim-"));
+  const trimCachePath = path.join(tempDir, "cache.json");
+  const trimConfigPath = path.join(tempDir, "config.json");
+
+  try {
+    fs.writeFileSync(
+      trimConfigPath,
+      JSON.stringify({
+        reasoningCachePath: trimCachePath,
+        reasoningCacheMaxSizeBytes: 900,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      trimCachePath,
+      JSON.stringify(
+        {
+          version: 2,
+          updatedAt: Date.now(),
+          toolCallReasoning: {
+            oldest: { reasoning: "x".repeat(500), updatedAt: 1 },
+            newest: { reasoning: "y".repeat(100), updatedAt: 999 },
+          },
+          assistantTextReasoning: {
+            middle: { reasoning: "z".repeat(300), updatedAt: 500 },
+          },
+          toolContextReasoning: {},
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const childEnv = { ...process.env };
+    delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE;
+    delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE_MAX_SIZE_BYTES;
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(__dirname, "..", "scripts", "trim-reasoning-cache.js"),
+        "--config",
+        trimConfigPath,
+        "--ratio",
+        "0.5",
+      ],
+      {
+        encoding: "utf8",
+        env: childEnv,
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.ok, true);
+    assert.ok(output.removedEntries > 0);
+    assert.ok(output.afterSizeBytes <= output.targetSizeBytes);
+
+    const cache = JSON.parse(fs.readFileSync(trimCachePath, "utf8"));
+    assert.equal(cache.toolCallReasoning.oldest, undefined);
+    assert.equal(cache.toolCallReasoning.newest.reasoning, "y".repeat(100));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

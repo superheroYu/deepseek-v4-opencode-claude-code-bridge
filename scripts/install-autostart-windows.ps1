@@ -2,7 +2,7 @@ param(
   [string]$TaskName = "DeepSeekV4OpenCodeClaudeCodeBridge",
   [string]$ConfigPath = "",
   [string]$NodePath = "",
-  [ValidateSet("Auto", "ScheduledTask", "StartupShortcut")]
+  [ValidateSet("Auto", "ScheduledTask", "StartupShortcut", "StartupTray")]
   [string]$Mode = "Auto"
 )
 
@@ -29,6 +29,8 @@ if (Test-Path -LiteralPath $nodewPath) {
 
 $serverPath = Join-Path $repoDir "server.js"
 $arguments = "`"$serverPath`" --config `"$ConfigPath`""
+$hiddenLauncherPath = Join-Path $repoDir "scripts\start-hidden-windows.vbs"
+$trayLauncherPath = Join-Path $repoDir "scripts\start-tray-windows.ps1"
 
 function Install-ScheduledTaskAutostart {
   $action = New-ScheduledTaskAction `
@@ -65,24 +67,74 @@ function Install-StartupShortcutAutostart {
     throw "Could not resolve the current user's Startup folder."
   }
 
+  $targetPath = $shortcutNodePath
+  $targetArguments = $arguments
+
+  if ($shortcutNodePath -eq $NodePath) {
+    $wscriptPath = Join-Path $env:WINDIR "System32\wscript.exe"
+    if (-not (Test-Path -LiteralPath $wscriptPath)) {
+      $wscriptCommand = Get-Command wscript.exe -ErrorAction Stop
+      $wscriptPath = $wscriptCommand.Source
+    }
+
+    $targetPath = $wscriptPath
+    $targetArguments = "`"$hiddenLauncherPath`" `"$ConfigPath`" `"$NodePath`""
+  }
+
   $shortcutPath = Join-Path $startupDir "$TaskName.lnk"
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($shortcutPath)
-  $shortcut.TargetPath = $shortcutNodePath
-  $shortcut.Arguments = $arguments
+  $shortcut.TargetPath = $targetPath
+  $shortcut.Arguments = $targetArguments
   $shortcut.WorkingDirectory = $repoDir
   $shortcut.Description = "Start DeepSeek V4 OpenCode Claude Code Bridge."
   $shortcut.WindowStyle = 7
   $shortcut.Save()
 
   Start-Process `
-    -FilePath $shortcutNodePath `
-    -ArgumentList $arguments `
+    -FilePath $targetPath `
+    -ArgumentList $targetArguments `
     -WorkingDirectory $repoDir `
     -WindowStyle Hidden
 
   Write-Host "Installed and started Windows Startup shortcut: $shortcutPath"
-  Write-Host "Node: $shortcutNodePath"
+  Write-Host "Target: $targetPath"
+  Write-Host "Node: $NodePath"
+  Write-Host "Config: $ConfigPath"
+}
+
+function Install-StartupTrayAutostart {
+  $startupDir = [Environment]::GetFolderPath("Startup")
+  if (-not $startupDir) {
+    throw "Could not resolve the current user's Startup folder."
+  }
+
+  $powershellPath = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+  if (-not (Test-Path -LiteralPath $powershellPath)) {
+    $powershellCommand = Get-Command powershell.exe -ErrorAction Stop
+    $powershellPath = $powershellCommand.Source
+  }
+
+  $shortcutPath = Join-Path $startupDir "$TaskName.lnk"
+  $shortcutArguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$trayLauncherPath`" -ConfigPath `"$ConfigPath`" -NodePath `"$NodePath`""
+  $shell = New-Object -ComObject WScript.Shell
+  $shortcut = $shell.CreateShortcut($shortcutPath)
+  $shortcut.TargetPath = $powershellPath
+  $shortcut.Arguments = $shortcutArguments
+  $shortcut.WorkingDirectory = $repoDir
+  $shortcut.Description = "Start DeepSeek V4 OpenCode Claude Code Bridge tray launcher."
+  $shortcut.WindowStyle = 7
+  $shortcut.Save()
+
+  Start-Process `
+    -FilePath $powershellPath `
+    -ArgumentList $shortcutArguments `
+    -WorkingDirectory $repoDir `
+    -WindowStyle Hidden
+
+  Write-Host "Installed and started Windows Startup tray shortcut: $shortcutPath"
+  Write-Host "Target: $powershellPath"
+  Write-Host "Node: $NodePath"
   Write-Host "Config: $ConfigPath"
 }
 
@@ -90,6 +142,8 @@ if ($Mode -eq "ScheduledTask") {
   Install-ScheduledTaskAutostart
 } elseif ($Mode -eq "StartupShortcut") {
   Install-StartupShortcutAutostart
+} elseif ($Mode -eq "StartupTray") {
+  Install-StartupTrayAutostart
 } else {
   try {
     Install-ScheduledTaskAutostart

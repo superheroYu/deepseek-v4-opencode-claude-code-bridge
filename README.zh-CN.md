@@ -229,6 +229,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1 -Mode StartupShortcut
 ```
 
+在“启动”文件夹模式下，脚本会优先使用 `nodew.exe`。如果当前 Node.js 安装没有
+`nodew.exe`，则使用 `wscript.exe` 加 `scripts/start-hidden-windows.vbs` 隐藏启动，
+让 bridge 在后台运行，不显示控制台窗口。这个模式不会创建托盘图标。
+
+如果你希望它出现在 Windows 右下角通知区域/隐藏图标里，可以使用:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-autostart-windows.ps1 -Mode StartupTray
+```
+
+托盘启动器提供打开 `/health`、把 reasoning cache 裁剪到 `reasoningCacheMaxSizeBytes`
+一半、重启 bridge、退出 bridge 的右键菜单。清理 cache 时会先停止 bridge，修改 cache
+文件后再重启，避免运行中的内存 cache 把裁剪后的文件覆盖回去。裁剪动作由
+`scripts/trim-reasoning-cache.js` 执行，所以大 cache 文件会交给 Node.js 解析和写回，
+不会由 PowerShell 直接处理。Windows 托盘图标会优先使用
+`assets/app-icon.ico`，`assets/app-icon.png` 作为源 PNG 保留。托盘菜单会跟随 Windows
+当前应用明暗主题，并在可用时使用较新的 Segoe UI 字体。
+
 取消自启动:
 
 ```powershell
