@@ -832,10 +832,7 @@ function openAiToAnthropic(body, originalModel, toolContextParts = []) {
     model: body.model || originalModel,
     stop_reason: mapFinishReason(choice.finish_reason),
     stop_sequence: null,
-    usage: {
-      input_tokens: body.usage && (body.usage.prompt_tokens || body.usage.input_tokens) || 0,
-      output_tokens: body.usage && (body.usage.completion_tokens || body.usage.output_tokens) || 0,
-    },
+    usage: openAiUsageToAnthropic(body.usage),
   };
 }
 
@@ -987,10 +984,20 @@ function upstreamResponseHeaders(headers) {
 
 function openAiUsageToAnthropic(usage) {
   if (!usage || typeof usage !== "object") return { input_tokens: 0, output_tokens: 0 };
-  return {
+  const out = {
     input_tokens: usage.prompt_tokens || usage.input_tokens || 0,
     output_tokens: usage.completion_tokens || usage.output_tokens || 0,
   };
+  if (usage.prompt_cache_hit_tokens) {
+    out.cache_read_input_tokens = usage.prompt_cache_hit_tokens;
+  }
+  if (usage.prompt_cache_miss_tokens) {
+    // Compatibility estimate: DeepSeek/OpenCode Go reports cache-miss input,
+    // not Anthropic-style cache creation. Mapping it here makes Claude Code
+    // /usage show the uncached side of DeepSeek billing as "cache write".
+    out.cache_creation_input_tokens = usage.prompt_cache_miss_tokens;
+  }
+  return out;
 }
 
 function createUpstreamContext(res) {
@@ -1133,7 +1140,12 @@ async function streamOpenAiAsAnthropic(upstream, res, model, toolContextParts = 
 
   function handleChunk(obj) {
     const choice = obj.choices && obj.choices[0];
-    if (obj.usage) usage = openAiUsageToAnthropic(obj.usage);
+    if (obj.usage) {
+      usage = openAiUsageToAnthropic(obj.usage);
+      if (process.env.CLAUDE_OPENCODE_LOG_USAGE) {
+        console.error(`usage raw=${JSON.stringify(obj.usage)} translated=${JSON.stringify(usage)}`);
+      }
+    }
     if (!choice) return;
     const delta = choice.delta || {};
 
@@ -1222,7 +1234,7 @@ async function streamOpenAiAsAnthropic(upstream, res, model, toolContextParts = 
     sse(res, "message_delta", {
       type: "message_delta",
       delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { output_tokens: usage.output_tokens || 0 },
+      usage,
     });
     sse(res, "message_stop", { type: "message_stop" });
     if (!res.writableEnded && !res.destroyed) res.end();

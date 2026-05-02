@@ -481,6 +481,38 @@ and add `?probe=upstream`:
 curl -H "x-api-key: sk-..." "http://127.0.0.1:8787/health?probe=upstream"
 ```
 
+## Usage Reporting
+
+The bridge maps upstream OpenAI-compatible usage into Anthropic-style usage for
+Claude Code. DeepSeek/OpenCode Go may return `prompt_tokens`,
+`completion_tokens`, `prompt_cache_hit_tokens`, and
+`prompt_cache_miss_tokens`.
+
+The bridge reports:
+
+- `input_tokens`: upstream `prompt_tokens` or `input_tokens`.
+- `output_tokens`: upstream `completion_tokens` or `output_tokens`.
+- `cache_read_input_tokens`: upstream `prompt_cache_hit_tokens`, when present.
+- `cache_creation_input_tokens`: upstream `prompt_cache_miss_tokens`, when present.
+
+`cache_creation_input_tokens` is intentionally a compatibility estimate in this
+project. DeepSeek cache misses mean tokens were not read from cache and are
+billed as cache-miss input; the upstream API does not report the exact number of
+tokens written into a new Anthropic-style cache entry. The bridge maps misses to
+Claude Code's cache-write field so `/usage` can show the DeepSeek cache-miss
+side of the request. In other words, read Claude Code's `cache write` value as
+DeepSeek/OpenCode Go cache-miss input, not as authoritative Anthropic cache
+creation.
+
+For streaming requests, upstream usage normally arrives in the final SSE chunk.
+The bridge therefore sends `input_tokens: 0` in `message_start` and sends final
+cumulative usage in `message_delta`.
+
+Claude Code `/usage` is only a translated token view. It is not the same as
+OpenCode Go subscription usage, which is based on dollar-value limits,
+model-specific pricing, and cached-token accounting. Use the OpenCode Go
+console as the source of truth for remaining quota.
+
 ## Development Checks
 
 ```bash

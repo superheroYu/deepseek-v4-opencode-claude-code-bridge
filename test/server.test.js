@@ -108,14 +108,24 @@ test("openAiToAnthropic converts text and tool calls", () => {
           },
         },
       ],
-      usage: { prompt_tokens: 10, completion_tokens: 5 },
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        prompt_cache_hit_tokens: 4,
+        prompt_cache_miss_tokens: 6,
+      },
     },
     "deepseek-v4-pro[1m]",
   );
 
   assert.equal(message.id, "chatcmpl_1");
   assert.equal(message.stop_reason, "tool_use");
-  assert.deepEqual(message.usage, { input_tokens: 10, output_tokens: 5 });
+  assert.deepEqual(message.usage, {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_read_input_tokens: 4,
+    cache_creation_input_tokens: 6,
+  });
   assert.deepEqual(message.content[0], {
     type: "thinking",
     thinking: "reasoning for response",
@@ -200,7 +210,7 @@ test("streamOpenAiAsAnthropic emits message_stop and usage", async () => {
       "utf8",
     );
     yield Buffer.from(
-      'data: {"choices":[{"finish_reason":"stop","delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}\n\n',
+      'data: {"choices":[{"finish_reason":"stop","delta":{}}],"usage":{"prompt_tokens":3,"completion_tokens":2,"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":2}}\n\n',
       "utf8",
     );
     yield Buffer.from("data: [DONE]\n\n", "utf8");
@@ -232,7 +242,10 @@ test("streamOpenAiAsAnthropic emits message_stop and usage", async () => {
   assert.match(output, /event: content_block_delta/);
   assert.match(output, /"text":"OK"/);
   assert.match(output, /event: message_delta/);
+  assert.match(output, /"input_tokens":3/);
   assert.match(output, /"output_tokens":2/);
+  assert.match(output, /"cache_read_input_tokens":1/);
+  assert.match(output, /"cache_creation_input_tokens":2/);
   assert.match(output, /event: message_stop/);
   assert.equal(res.writableEnded, true);
 });

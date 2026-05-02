@@ -449,6 +449,34 @@ curl http://127.0.0.1:8787/health
 curl -H "x-api-key: sk-..." "http://127.0.0.1:8787/health?probe=upstream"
 ```
 
+## 用量统计说明
+
+bridge 会把上游 OpenAI-compatible usage 转成 Claude Code 能理解的
+Anthropic-style usage。DeepSeek/OpenCode Go 可能返回 `prompt_tokens`、
+`completion_tokens`、`prompt_cache_hit_tokens`、`prompt_cache_miss_tokens`。
+
+bridge 会报告:
+
+- `input_tokens`: 上游的 `prompt_tokens` 或 `input_tokens`。
+- `output_tokens`: 上游的 `completion_tokens` 或 `output_tokens`。
+- `cache_read_input_tokens`: 上游的 `prompt_cache_hit_tokens`，如果存在。
+- `cache_creation_input_tokens`: 上游的 `prompt_cache_miss_tokens`，如果存在。
+
+`cache_creation_input_tokens` 在本项目中是有意保留的兼容性估算。DeepSeek 的
+cache miss 表示这些 token 没有从缓存读取，并会按 cache-miss input 计费；上游
+API 并不会返回“本次实际写入 Anthropic 风格新缓存条目的 token 数”。bridge 会
+把 miss 映射到 Claude Code 的 cache-write 字段，让 `/usage` 能看到 DeepSeek
+请求中的 cache-miss 侧用量。换句话说，在本项目里应把 Claude Code 的
+`cache write` 理解为 DeepSeek/OpenCode Go 的 cache-miss input，而不是权威的
+Anthropic cache creation。
+
+流式请求中，上游 usage 通常在最后一个 SSE chunk 才出现。因此 bridge 会先在
+`message_start` 中发送 `input_tokens: 0`，最后在 `message_delta` 中补充累计 usage。
+
+Claude Code `/usage` 只能作为 token 视角的翻译统计，不等于 OpenCode Go 订阅额度。
+OpenCode Go 的真实用量以 console 为准，因为它按美元额度、模型价格和 cached token
+规则计算。
+
 ## 开发检查
 
 ```bash
