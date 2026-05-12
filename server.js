@@ -663,7 +663,7 @@ function anthropicMessagesToOpenAi(messages, includeReasoningContent) {
     out.push({ role: msg.role, content: text });
   }
 
-  return coalesceAdjacentAssistantToolCalls(out);
+  return sanitizeOpenAiToolMessageSequence(coalesceAdjacentAssistantToolCalls(out));
 }
 
 function mergeAssistantContent(left, right) {
@@ -699,6 +699,87 @@ function coalesceAdjacentAssistantToolCalls(messages) {
     }
 
     out.push(msg);
+  }
+
+  return out;
+}
+
+function assistantWithoutToolCalls(message) {
+  if (!message || message.role !== "assistant") return null;
+  const out = { ...message };
+  delete out.tool_calls;
+  if (out.content === null || out.content === undefined || out.content === "") {
+    return null;
+  }
+  return out;
+}
+
+function orphanToolMessageToUser(message) {
+  if (!message || message.role !== "tool") return null;
+  const id = message.tool_call_id || "unknown";
+  const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content || "");
+  return {
+    role: "user",
+    content: `Tool result without a matching tool call (${id}):\n${content}`,
+  };
+}
+
+function sanitizeOpenAiToolMessageSequence(messages) {
+  const out = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const toolCalls = Array.isArray(message && message.tool_calls) ? message.tool_calls : [];
+
+    if (message && message.role === "assistant" && toolCalls.length) {
+      const toolMessages = [];
+      let j = i + 1;
+      while (j < messages.length && messages[j] && messages[j].role === "tool") {
+        toolMessages.push(messages[j]);
+        j += 1;
+      }
+
+      if (!toolMessages.length && j === messages.length) {
+        out.push(message);
+        continue;
+      }
+
+      const expectedIds = new Set(toolCalls.map((call) => call && call.id).filter(Boolean));
+      const toolById = new Map();
+      const orphanTools = [];
+      for (const toolMessage of toolMessages) {
+        const id = toolMessage.tool_call_id;
+        if (expectedIds.has(id) && !toolById.has(id)) {
+          toolById.set(id, toolMessage);
+        } else {
+          orphanTools.push(toolMessage);
+        }
+      }
+
+      const fulfilledCalls = toolCalls.filter((call) => call && toolById.has(call.id));
+      if (fulfilledCalls.length) {
+        out.push({ ...message, tool_calls: fulfilledCalls });
+        for (const call of fulfilledCalls) out.push(toolById.get(call.id));
+      } else {
+        const fallback = assistantWithoutToolCalls(message);
+        if (fallback) out.push(fallback);
+      }
+
+      for (const orphan of orphanTools) {
+        const userMessage = orphanToolMessageToUser(orphan);
+        if (userMessage) out.push(userMessage);
+      }
+      i = j - 1;
+      continue;
+    }
+
+    if (message && message.role === "tool") {
+      const userMessage = orphanToolMessageToUser(message);
+      if (userMessage) out.push(userMessage);
+      continue;
+    }
+
+    out.push(message);
   }
 
   return out;
