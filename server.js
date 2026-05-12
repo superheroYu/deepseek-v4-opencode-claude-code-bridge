@@ -605,18 +605,24 @@ function anthropicMessagesToOpenAi(messages, includeReasoningContent) {
     const toolUses = blocks.filter((block) => block && block.type === "tool_use");
 
     if (msg.role === "user") {
-      if (!toolResults.length) {
+      if (toolResults.length) {
+        for (const result of toolResults) {
+          if (currentUserTurnHadToolCall) currentToolContext.push(toolResultSignature(result));
+          out.push({
+            role: "tool",
+            tool_call_id: result.tool_use_id || result.id || "call_unknown",
+            content: stringifyToolResultContent(result.content),
+          });
+        }
+        if (text) {
+          currentUserTurnHadToolCall = false;
+          currentToolContext = [];
+          out.push({ role: "user", content: text });
+        }
+      } else {
         currentUserTurnHadToolCall = false;
         currentToolContext = [];
-      }
-      if (text) out.push({ role: "user", content: text });
-      for (const result of toolResults) {
-        if (currentUserTurnHadToolCall) currentToolContext.push(toolResultSignature(result));
-        out.push({
-          role: "tool",
-          tool_call_id: result.tool_use_id || result.id || "call_unknown",
-          content: stringifyToolResultContent(result.content),
-        });
+        if (text) out.push({ role: "user", content: text });
       }
       continue;
     }
@@ -655,6 +661,44 @@ function anthropicMessagesToOpenAi(messages, includeReasoningContent) {
     }
 
     out.push({ role: msg.role, content: text });
+  }
+
+  return coalesceAdjacentAssistantToolCalls(out);
+}
+
+function mergeAssistantContent(left, right) {
+  const parts = [];
+  if (typeof left === "string" && left) parts.push(left);
+  if (typeof right === "string" && right) parts.push(right);
+  return parts.length ? parts.join("\n") : null;
+}
+
+function coalesceAdjacentAssistantToolCalls(messages) {
+  const out = [];
+
+  for (const msg of messages) {
+    const prev = out[out.length - 1];
+    if (
+      prev &&
+      msg &&
+      prev.role === "assistant" &&
+      msg.role === "assistant" &&
+      Array.isArray(prev.tool_calls) &&
+      prev.tool_calls.length &&
+      Array.isArray(msg.tool_calls) &&
+      msg.tool_calls.length
+    ) {
+      prev.content = mergeAssistantContent(prev.content, msg.content);
+      prev.tool_calls.push(...msg.tool_calls);
+      if (msg.reasoning_content) {
+        prev.reasoning_content = [prev.reasoning_content, msg.reasoning_content]
+          .filter(Boolean)
+          .join("\n");
+      }
+      continue;
+    }
+
+    out.push(msg);
   }
 
   return out;

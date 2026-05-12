@@ -83,6 +83,111 @@ test("anthropicToOpenAi converts messages, tools, and DeepSeek reasoning", () =>
   assert.equal(payload.tool_choice, undefined);
 });
 
+test("anthropicToOpenAi coalesces split assistant tool calls before tool results", () => {
+  const payload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-pro[1m]",
+      messages: [
+        { role: "user", content: "Update docs." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_1",
+              name: "Edit",
+              input: { file_path: "CLAUDE.md" },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_2",
+              name: "Edit",
+              input: { file_path: "README.md" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_1",
+              content: "CLAUDE.md updated",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_2",
+              content: "README.md updated",
+            },
+          ],
+        },
+      ],
+    },
+    false,
+  );
+
+  assert.deepEqual(
+    payload.messages.map((message) => message.role),
+    ["user", "assistant", "tool", "tool"],
+  );
+  assert.equal(payload.messages[1].tool_calls.length, 2);
+  assert.equal(payload.messages[1].tool_calls[0].id, "call_1");
+  assert.equal(payload.messages[1].tool_calls[1].id, "call_2");
+  assert.equal(payload.messages[2].tool_call_id, "call_1");
+  assert.equal(payload.messages[3].tool_call_id, "call_2");
+});
+
+test("anthropicToOpenAi keeps tool results before user text in a mixed user block", () => {
+  const payload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-pro[1m]",
+      messages: [
+        { role: "user", content: "Read then continue." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "call_1",
+              name: "Read",
+              input: { file_path: "README.md" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Continue after this result." },
+            {
+              type: "tool_result",
+              tool_use_id: "call_1",
+              content: "README contents",
+            },
+          ],
+        },
+      ],
+    },
+    false,
+  );
+
+  assert.deepEqual(
+    payload.messages.map((message) => message.role),
+    ["user", "assistant", "tool", "user"],
+  );
+  assert.equal(payload.messages[2].tool_call_id, "call_1");
+  assert.equal(payload.messages[3].content, "Continue after this result.");
+});
+
 test("openAiToAnthropic converts text and tool calls", () => {
   const message = bridge.openAiToAnthropic(
     {
