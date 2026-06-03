@@ -328,6 +328,8 @@ A user service normally starts after the user session exists. If you need it to 
 sudo loginctl enable-linger "$USER"
 ```
 
+If your upstream connection requires a proxy, run the install command from a shell that already has `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY` set. The Linux installer copies those proxy variables into the systemd user service and, on Node.js versions that support it, starts Node with `--use-env-proxy` so built-in `fetch` uses them. Proxy settings from `.bashrc`, `.zshrc`, or other interactive shell startup files are not automatically inherited by `systemd --user`.
+
 </details>
 
 <details>

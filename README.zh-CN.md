@@ -328,6 +328,8 @@ systemctl --user status deepseek-v4-opencode-claude-code-bridge.service
 sudo loginctl enable-linger "$USER"
 ```
 
+如果上游连接需要代理，请在已经设置了 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 或 `NO_PROXY` 的 shell 里执行安装命令。Linux 安装脚本会把这些代理环境变量写入 systemd 用户服务；如果当前 Node.js 版本支持，还会加上 `--use-env-proxy`，让内置 `fetch` 使用这些代理。`.bashrc`、`.zshrc` 等交互式 shell 启动文件里的代理配置不会被 `systemd --user` 自动继承。
+
 </details>
 
 <details>

@@ -806,6 +806,29 @@ test("Linux autostart service writes unquoted systemd WorkingDirectory", () => {
   assert.doesNotMatch(script, /WorkingDirectory="\$\(escape_systemd_arg "\$REPO_DIR"\)"/);
 });
 
+test("Linux autostart service captures proxy environment for Node fetch", () => {
+  const script = fs.readFileSync(
+    path.join(__dirname, "..", "scripts", "install-autostart-linux.sh"),
+    "utf8",
+  );
+
+  assert.match(script, /proxy_environment_lines\(\)/);
+  assert.match(script, /HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy/);
+  assert.match(script, /Environment="%s=%s"\\n/);
+  assert.match(script, /--use-env-proxy/);
+  assert.match(script, /ExecStart="\$\(escape_systemd_arg "\$NODE_BIN"\)"\$NODE_ENV_PROXY_ARG/);
+});
+
+test("Linux autostart service warns when lingering is not enabled", () => {
+  const script = fs.readFileSync(
+    path.join(__dirname, "..", "scripts", "install-autostart-linux.sh"),
+    "utf8",
+  );
+
+  assert.match(script, /loginctl show-user "\$USER" -p Linger --value/);
+  assert.match(script, /sudo loginctl enable-linger/);
+});
+
 function runTrimHelper(configPath, ratio = "0.5") {
   const childEnv = { ...process.env };
   delete childEnv.CLAUDE_OPENCODE_REASONING_CACHE;
