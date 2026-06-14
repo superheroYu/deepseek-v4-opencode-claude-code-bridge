@@ -142,6 +142,9 @@ function loadConfig() {
     ),
     reasoningContentMode:
       envValue("CLAUDE_OPENCODE_REASONING_CONTENT", configValue(fileConfig, ["reasoningContent"], "auto")),
+    resolveThinkingConflict:
+      envValue("CLAUDE_OPENCODE_RESOLVE_THINKING_CONFLICT",
+        configValue(fileConfig, ["resolveThinkingConflict"], true)),
     requestBodyLimitBytes: numberConfig(
       "requestBodyLimitBytes",
       envValue(
@@ -1390,8 +1393,22 @@ async function streamOpenAiAsAnthropic(upstream, res, model, toolContextParts = 
   }
 }
 
+/** When `thinking.type` is `"disabled"`, strip `reasoning_effort` and
+ *  `output_config.effort`.  Claude Code 2.1.166+ sends both, which
+ *  DeepSeek's Anthropic-compatible endpoint rejects:
+ *    400: thinking options type cannot be disabled when reasoning_effort is set
+ */
+function resolveThinkingConflict(body) {
+  if (!body || typeof body !== "object") return;
+  if (body.thinking && body.thinking.type === "disabled") {
+    delete body.output_config?.effort;
+    delete body.reasoning_effort;
+  }
+}
+
 async function handleMessages(req, res) {
   const body = await readJsonBody(req);
+  if (CONFIG.resolveThinkingConflict) resolveThinkingConflict(body);
   const wantsStream = body.stream === true;
   const toolContextParts = currentToolContextParts(body.messages);
   const payload = anthropicToOpenAi(body, wantsStream);
@@ -1556,6 +1573,7 @@ module.exports = {
   openAiToAnthropic,
   reasoningFromMessage,
   requestAuthToken,
+  resolveThinkingConflict,
   saveReasoningCacheNow,
   setToolReasoning,
   startServer,
