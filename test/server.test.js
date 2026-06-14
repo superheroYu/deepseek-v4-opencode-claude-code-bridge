@@ -973,3 +973,58 @@ test("trim-reasoning-cache helper leaves small caches untouched", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+
+
+test("resolveThinkingConflict strips reasoning_effort when thinking.type is disabled (non-streaming)", () => {
+  const body = {
+    model: "deepseek-chat",
+    messages: [{ role: "user", content: "你好" }],
+    max_tokens: 100,
+    thinking: { type: "disabled" },
+    reasoning_effort: "medium",
+  };
+  bridge.resolveThinkingConflict(body);
+  assert.equal(body.thinking.type, "disabled", "thinking should be preserved");
+  assert.equal(body.reasoning_effort, undefined, "reasoning_effort must be removed");
+  assert.equal(body.output_config?.effort, undefined);
+});
+
+test("resolveThinkingConflict strips output_config.effort when thinking.type is disabled (streaming)", () => {
+  const body = {
+    model: "deepseek-chat",
+    messages: [{ role: "user", content: "你好" }],
+    max_tokens: 100,
+    stream: true,
+    thinking: { type: "disabled" },
+    output_config: { effort: "high" },
+  };
+  bridge.resolveThinkingConflict(body);
+  assert.equal(body.thinking.type, "disabled", "thinking should be preserved");
+  assert.equal(body.output_config?.effort, undefined, "output_config.effort must be removed");
+  assert.equal(body.stream, true);
+});
+
+test("resolveThinkingConflict preserves effort when thinking.type is enabled", () => {
+  const body = {
+    model: "deepseek-chat",
+    messages: [{ role: "user", content: "你好" }],
+    max_tokens: 100,
+    thinking: { type: "enabled", budget_tokens: 4000 },
+    reasoning_effort: "high",
+  };
+  bridge.resolveThinkingConflict(body);
+  assert.deepEqual(body.thinking, { type: "enabled", budget_tokens: 4000 }, "thinking enabled should be preserved");
+  assert.equal(body.reasoning_effort, "high", "effort should be preserved when thinking is enabled");
+});
+
+test("resolveThinkingConflict does nothing when thinking field is absent", () => {
+  const body = {
+    model: "deepseek-chat",
+    messages: [{ role: "user", content: "你好" }],
+    max_tokens: 100,
+    reasoning_effort: "low",
+  };
+  bridge.resolveThinkingConflict(body);
+  assert.equal(body.reasoning_effort, "low");
+});

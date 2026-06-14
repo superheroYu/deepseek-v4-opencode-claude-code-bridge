@@ -191,6 +191,7 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
     "deepseek-v4-flash"
   ],
   "reasoningContent": "auto",
+  "resolveThinkingConflict": true,
   "reasoningCacheMaxEntries": 0,
   "reasoningCacheMaxAgeMs": 2592000000,
   "reasoningCacheMaxSizeBytes": 209715200,
@@ -211,6 +212,7 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
 | `upstream.baseUrl` | OpenAI 兼容上游 base URL。OpenCode Go 使用 `https://opencode.ai/zen/go/v1`。 |
 | `models` | 本地 `/v1/models` 返回的模型 ID。 |
 | `reasoningContent` | `auto` / `always` / `never`。OpenCode Go 建议保持 `auto`，只对 DeepSeek 模型名回放 reasoning 历史。 |
+| `resolveThinkingConflict` | `true` 或 `false`。开启后自动剥离请求中与 `reasoning_effort` 或 `output_config.effort` 同时出现的 `thinking` 字段，避免 DeepSeek 返回 400 错误：*"thinking options type cannot be disabled when reasoning_effort is set"*。Claude Code 2.1.166 及以上版本会同时发送这两个参数导致冲突，建议保持默认 `true`。 |
 | `reasoningCacheMaxEntries` | 每个 reasoning cache bucket 的最大条目数。默认 `0` 表示不按条目数裁剪。 |
 | `reasoningCacheMaxAgeMs` | cache 条目自最近一次使用后的最长保留时间。默认 `30 天`。设为 `0` 关闭按时间裁剪。 |
 | `reasoningCacheMaxSizeBytes` | 序列化后的 cache 文件大小上限。默认 `200 MB`。超出时优先移除最旧条目。 |

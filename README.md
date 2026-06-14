@@ -191,6 +191,7 @@ The repository includes a ready-to-use `config.json`. It does **not** contain an
     "deepseek-v4-flash"
   ],
   "reasoningContent": "auto",
+  "resolveThinkingConflict": true,
   "reasoningCacheMaxEntries": 0,
   "reasoningCacheMaxAgeMs": 2592000000,
   "reasoningCacheMaxSizeBytes": 209715200,
@@ -211,6 +212,7 @@ The repository includes a ready-to-use `config.json`. It does **not** contain an
 | `upstream.baseUrl` | OpenAI-compatible upstream base URL. For OpenCode Go: `https://opencode.ai/zen/go/v1`. |
 | `models` | Model IDs returned by the local `/v1/models` endpoint. |
 | `reasoningContent` | `auto`, `always`, or `never`. Keep `auto` for OpenCode Go — replays DeepSeek reasoning only for DeepSeek model names. |
+| `resolveThinkingConflict` | `true` or `false`. When enabled, strips `thinking` from requests that also include `reasoning_effort` or `output_config.effort` to avoid DeepSeek's 400 error: *"thinking options type cannot be disabled when reasoning_effort is set"*. Claude Code 2.1.166+ sends both parameters together, causing this conflict — keep default `true`. |
 | `reasoningCacheMaxEntries` | Max entries per reasoning cache bucket. `0` disables count-based trimming. |
 | `reasoningCacheMaxAgeMs` | Max age since last use. Default `30 days`. `0` disables age-based trimming. |
 | `reasoningCacheMaxSizeBytes` | Max serialized cache file size. Default `200 MB`. Oldest entries are removed first. |

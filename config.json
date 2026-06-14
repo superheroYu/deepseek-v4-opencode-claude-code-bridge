@@ -11,6 +11,7 @@
     "deepseek-v4-flash"
   ],
   "reasoningContent": "auto",
+  "resolveThinkingConflict": true,
   "reasoningCacheMaxEntries": 0,
   "reasoningCacheMaxAgeMs": 2592000000,
   "reasoningCacheMaxSizeBytes": 209715200,
