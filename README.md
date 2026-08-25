@@ -73,6 +73,7 @@ The bridge translates:
 | Anthropic Messages API | ⇄ | OpenAI-compatible Chat Completions |
 | --- | :---: | --- |
 | `messages[].content` (text / `tool_use` / `tool_result`) | → | `messages` with `role=user/assistant/tool` |
+| User `image` source (`base64` / `url`) | → | User `image_url` block (data URL / `http(s)` URL) |
 | `tools[{ name, description, input_schema }]` | → | `tools[{ type: "function", function: { name, description, parameters } }]` |
 | `tool_choice` | → | softened to system instruction when needed |
 | SSE `message_*` / `content_block_*` events | → | streaming chat completion chunks |
@@ -93,17 +94,20 @@ For DeepSeek V4, it also preserves `reasoning_content` for thinking-mode tool ca
 
 - Claude Code `/v1/messages` non-streaming + streaming
 - Text content
+- User image input for allowlisted vision models: mixed text/image, image-only, and multiple images
 - Claude Code tool calls and tool results
 - OpenAI-compatible function calling
 - DeepSeek V4 `reasoning_content` replay for tool-call history
 - **Verified**: OpenCode Go DeepSeek V4 Pro & Flash
+- **Experimental / opt-in**: `deepseek-v4-flash-vision-exp`
 - **Experimental**: other OpenCode Go `/v1/chat/completions` models
 - Windows, Linux, macOS (Node.js)
 
 </td>
 <td valign="top">
 
-- Image, audio, prompt caching, Anthropic beta fields
+- Audio, prompt caching, Anthropic beta fields
+- Anthropic Files API image sources, image generation, and image output
 - Forced `tool_choice` (softened to system instruction)
 - DeepSeek reasoning replay for non-DeepSeek models (off by default)
 - Anthropic-signed thinking blocks (empty `signature` is used)
@@ -188,7 +192,11 @@ The repository includes a ready-to-use `config.json`. It does **not** contain an
   },
   "models": [
     "deepseek-v4-pro[1m]",
-    "deepseek-v4-flash"
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp"
+  ],
+  "visionModels": [
+    "deepseek-v4-flash-vision-exp"
   ],
   "reasoningContent": "auto",
   "reasoningCacheMaxEntries": 0,
@@ -210,6 +218,7 @@ The repository includes a ready-to-use `config.json`. It does **not** contain an
 | `listen.port` | Local proxy port. |
 | `upstream.baseUrl` | OpenAI-compatible upstream base URL. For OpenCode Go: `https://opencode.ai/zen/go/v1`. |
 | `models` | Model IDs returned by the local `/v1/models` endpoint. |
+| `visionModels` | Exact model IDs allowed to receive image content. Keep this as a narrow allowlist. |
 | `reasoningContent` | `auto`, `always`, or `never`. Keep `auto` for OpenCode Go — replays DeepSeek reasoning only for DeepSeek model names. |
 | `reasoningCacheMaxEntries` | Max entries per reasoning cache bucket. `0` disables count-based trimming. |
 | `reasoningCacheMaxAgeMs` | Max age since last use. Default `30 days`. `0` disables age-based trimming. |
@@ -430,9 +439,45 @@ claude -p "Reply OK only" --max-turns 1 --settings ~/.claude/settings.opencode-p
 
 `CLAUDE_CODE_EFFORT_LEVEL=max` asks Claude Code to use the highest available reasoning effort with the selected backend. You can lower or remove it if you prefer faster responses. In practice, reasoning effort is not a precise control: Claude Code session state, `/effort`, `effortLevel`, and `CLAUDE_CODE_EFFORT_LEVEL` can interact, and DeepSeek/OpenCode Go may normalize the final value. Treat it as a requested effort hint rather than an exact knob.
 
-When Claude Code includes Anthropic-format `thinking` and `output_config.effort` fields in a request, the bridge translates them to DeepSeek/OpenAI-compatible `thinking` and `reasoning_effort` for DeepSeek model names only. The bridge does not force thinking from `config.json`; per-session `/effort` remains owned by Claude Code. According to DeepSeek's thinking-mode guide, thinking is enabled by default, and complex agent requests such as Claude Code/OpenCode may be treated as max-effort thinking requests. In practice, `/effort` and `effortLevel` influence the effort requested from Claude Code, but they do not guarantee exact backend behavior. If Claude Code does not send a `thinking` field, the bridge lets DeepSeek use its own default behavior. For DeepSeek V4 compatibility, `low` and `medium` effort are sent as `high`, while `xhigh` is sent as `max`.
+When Claude Code includes Anthropic-format `thinking` and `output_config.effort` fields in a request, the bridge translates them to DeepSeek/OpenAI-compatible `thinking` and `reasoning_effort` for DeepSeek model names only. Claude Code's `adaptive` thinking type is mapped to DeepSeek's `enabled` type. The bridge does not force thinking from `config.json`; per-session `/effort` remains owned by Claude Code. According to DeepSeek's thinking-mode guide, thinking is enabled by default. In practice, `/effort` and `effortLevel` influence the effort requested from Claude Code, but they do not guarantee exact backend behavior. If Claude Code does not send a `thinking` field, the bridge lets DeepSeek use its own default behavior. Under DeepSeek's current mapping, `low` remains `low`, `medium` and `xhigh` are sent as `high`, and `max` remains `max`.
 
 When DeepSeek returns `reasoning_content`, the bridge emits Anthropic-compatible `thinking` content blocks so Claude Code can display thinking output. The same reasoning is also cached for later DeepSeek tool-call history replay.
+
+**Experimental vision model**
+
+`deepseek-v4-flash-vision-exp` is an opt-in experimental visual-understanding model. It is available in the default model catalog, but it does **not** replace or automatically route requests away from the default Pro/Flash models. OpenCode Go expects the raw model ID `deepseek-v4-flash-vision-exp`, without an `opencode-go/` prefix.
+
+For a custom `config.json`, advertise the model and allow image input explicitly:
+
+```json
+{
+  "models": [
+    "deepseek-v4-pro[1m]",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp"
+  ],
+  "visionModels": [
+    "deepseek-v4-flash-vision-exp"
+  ]
+}
+```
+
+Then select it for the current Claude Code conversation with the model picker or `/model`, or make it the main model in your Claude Code settings:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_MODEL": "deepseek-v4-flash-vision-exp",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
+  }
+}
+```
+
+The bridge accepts Anthropic `image` blocks in **user messages** with either `source.type: "base64"` or an `http(s)` `source.type: "url"`, and converts them to OpenAI-compatible Chat Completions `image_url` blocks. Text/image order is preserved, and mixed text/image, image-only, and multi-image requests are supported. Images nested inside `tool_result.content` are emitted after the required tool messages as a legal user image message. Anthropic `source.type: "file"` / Files API references are not supported in this release.
+
+Only models listed in `visionModels` may receive images. Sending image content to Pro, regular Flash, or another non-vision model returns an explicit `400` error instead of silently dropping it. This is **image input with text output**; the bridge does not generate or return images.
+
+DeepSeek currently accepts JPEG, PNG, GIF, and WebP. Its upstream limits still apply through OpenCode Go: a `48 MiB` request body, `32 MiB` per base64 or external-URL image, and at most `600` images per request. The bridge's `requestBodyLimitBytes` setting does not raise these upstream limits.
 
 **Experimenting with another model**
 
@@ -609,7 +654,7 @@ As of the OpenCode Go documentation, these Go models use `/v1/chat/completions` 
 
 | Family | Models |
 | --- | --- |
-| 🧠 DeepSeek | `deepseek-v4-pro[1m]`, `deepseek-v4-flash` |
+| 🧠 DeepSeek | `deepseek-v4-pro[1m]`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp` (experimental vision) |
 | 🌌 GLM | `glm-5.1`, `glm-5` |
 | 🌙 Kimi | `kimi-k2.6`, `kimi-k2.5` |
 | 🎭 MiMo | `mimo-v2-pro`, `mimo-v2-omni`, `mimo-v2.5-pro`, `mimo-v2.5` |
@@ -637,6 +682,7 @@ To try an experimental non-DeepSeek model, add it to `config.json`:
 
 - 📘 [OpenCode Go documentation](https://opencode.ai/docs/zh-cn/go/) — model IDs, API endpoints, and AI SDK provider notes for OpenCode Go.
 - 📗 [DeepSeek API documentation](https://api-docs.deepseek.com/) — official DeepSeek API overview.
+- 👁️ [DeepSeek vision guide](https://api-docs.deepseek.com/guides/vision/) — official image formats, request shapes, restrictions, and limits for `deepseek-v4-flash-vision-exp`.
 - 🧠 [DeepSeek thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode) — `reasoning_content` behavior and thinking-mode tool-call history requirements.
 - 🔧 [DeepSeek tool calls guide](https://api-docs.deepseek.com/zh-cn/guides/tool_calls) — DeepSeek function/tool calling behavior.
 - 🤖 [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages) — the `/v1/messages` protocol shape expected by Claude-compatible clients.

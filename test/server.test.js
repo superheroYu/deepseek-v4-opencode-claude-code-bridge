@@ -188,6 +188,251 @@ test("anthropicToOpenAi keeps tool results before user text in a mixed user bloc
   assert.equal(payload.messages[3].content, "Continue after this result.");
 });
 
+test("anthropicToOpenAi preserves ordered text and base64 images for DeepSeek Vision", () => {
+  const payload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Before" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "iVBORw0KGgo=",
+              },
+            },
+            { type: "text", text: "After" },
+          ],
+        },
+      ],
+    },
+    false,
+  );
+
+  assert.deepEqual(payload.messages, [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Before" },
+        {
+          type: "image_url",
+          image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
+        },
+        { type: "text", text: "After" },
+      ],
+    },
+  ]);
+});
+
+test("anthropicToOpenAi keeps image-only URL messages for DeepSeek Vision", () => {
+  const payload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "url", url: "https://example.com/screenshot.webp" },
+            },
+          ],
+        },
+      ],
+    },
+    true,
+  );
+
+  assert.deepEqual(payload.messages[0], {
+    role: "user",
+    content: [
+      {
+        type: "image_url",
+        image_url: { url: "https://example.com/screenshot.webp" },
+      },
+    ],
+  });
+  assert.equal(payload.stream, true);
+});
+
+test("image input is rejected for non-vision, system, assistant, and file-source requests", () => {
+  const base64Image = {
+    type: "image",
+    source: { type: "base64", media_type: "image/jpeg", data: "/9j/2Q==" },
+  };
+
+  assert.throws(
+    () =>
+      bridge.anthropicToOpenAi(
+        {
+          model: "deepseek-v4-flash",
+          messages: [{ role: "user", content: [base64Image] }],
+        },
+        false,
+      ),
+    /does not support image input.*deepseek-v4-flash-vision-exp/,
+  );
+  assert.throws(
+    () =>
+      bridge.anthropicToOpenAi(
+        {
+          model: "deepseek-v4-flash-vision-exp",
+          system: [base64Image],
+          messages: [{ role: "user", content: "hello" }],
+        },
+        false,
+      ),
+    /only accepts images in user messages, not system content/,
+  );
+  assert.throws(
+    () =>
+      bridge.anthropicToOpenAi(
+        {
+          model: "deepseek-v4-flash-vision-exp",
+          messages: [{ role: "assistant", content: [base64Image] }],
+        },
+        false,
+      ),
+    /only accepts images in user messages, not assistant messages/,
+  );
+  assert.throws(
+    () =>
+      bridge.anthropicToOpenAi(
+        {
+          model: "deepseek-v4-flash-vision-exp",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "file", file_id: "file-api-example" },
+                },
+              ],
+            },
+          ],
+        },
+        false,
+      ),
+    /does not proxy DeepSeek's Files API/,
+  );
+});
+
+test("vision image validation enforces media type, URL protocol, length, and count limits", () => {
+  const convertImage = (image) =>
+    bridge.anthropicToOpenAi(
+      {
+        model: "deepseek-v4-flash-vision-exp",
+        messages: [{ role: "user", content: [image] }],
+      },
+      false,
+    );
+
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" },
+      }),
+    /Unsupported image media_type/,
+  );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "url", url: "ftp://example.com/image.png" },
+      }),
+    /must use http or https/,
+  );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "url", url: `https://example.com/${"x".repeat(8192)}` },
+      }),
+    /8192-character limit/,
+  );
+
+  const tooManyImages = Array.from({ length: 601 }, () => ({
+    type: "image",
+    source: { type: "url", url: "https://example.com/image.png" },
+  }));
+  assert.throws(
+    () =>
+      bridge.anthropicToOpenAi(
+        {
+          model: "deepseek-v4-flash-vision-exp",
+          messages: [{ role: "user", content: tooManyImages }],
+        },
+        false,
+      ),
+    /600 images per request/,
+  );
+});
+
+test("tool_result images follow contiguous tool messages as user image content", () => {
+  bridge.setToolReasoning("call_image", "reasoning for image tool call");
+  const payload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call_image", name: "Screenshot", input: {} },
+            { type: "tool_use", id: "call_text", name: "Read", input: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_image",
+              content: [
+                { type: "text", text: "screenshot captured" },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: "iVBORw0KGgo=",
+                  },
+                },
+              ],
+            },
+            {
+              type: "tool_result",
+              tool_use_id: "call_text",
+              content: "file contents",
+            },
+          ],
+        },
+      ],
+    },
+    false,
+  );
+
+  assert.deepEqual(
+    payload.messages.map((message) => message.role),
+    ["assistant", "tool", "tool", "user"],
+  );
+  assert.equal(payload.messages[0].tool_calls.length, 2);
+  assert.match(payload.messages[0].reasoning_content, /reasoning for image tool call/);
+  assert.match(payload.messages[1].content, /screenshot captured/);
+  assert.match(payload.messages[1].content, /following user message/);
+  assert.doesNotMatch(payload.messages[1].content, /iVBORw0KGgo/);
+  assert.equal(payload.messages[2].content, "file contents");
+  assert.deepEqual(payload.messages[3].content[1], {
+    type: "image_url",
+    image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
+  });
+});
+
 test("anthropicToOpenAi drops unfulfilled tool calls from broken history", () => {
   const payload = bridge.anthropicToOpenAi(
     {
@@ -404,6 +649,27 @@ test("currentToolContextParts tracks the latest active tool context", () => {
   );
 });
 
+test("currentToolContextParts resets stale tool context on an image-only user turn", () => {
+  assert.deepEqual(
+    bridge.currentToolContextParts([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_stale", name: "Screenshot", input: {} }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "url", url: "https://example.com/new-turn.png" },
+          },
+        ],
+      },
+    ]),
+    [],
+  );
+});
+
 test("mapFinishReason covers known values", () => {
   assert.equal(bridge.mapFinishReason("tool_calls"), "tool_use");
   assert.equal(bridge.mapFinishReason("length"), "max_tokens");
@@ -484,6 +750,153 @@ test("createServer returns 400 for malformed JSON", async () => {
   }
 });
 
+test("createServer exposes and forwards DeepSeek Vision image payloads", async () => {
+  const originalFetch = global.fetch;
+  let upstreamCalls = 0;
+  let upstreamUrl;
+  let upstreamPayload;
+  let upstreamAuthorization;
+  global.fetch = async (url, options) => {
+    upstreamCalls += 1;
+    upstreamUrl = String(url);
+    upstreamPayload = JSON.parse(options.body);
+    upstreamAuthorization = options.headers.authorization;
+    return new Response(
+      JSON.stringify({
+        id: "chatcmpl_vision",
+        model: "deepseek-v4-flash-vision-exp",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { role: "assistant", content: "vision ok" },
+          },
+        ],
+        usage: { prompt_tokens: 3, completion_tokens: 2 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const server = bridge.createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  try {
+    const modelsResponse = await originalFetch(`http://127.0.0.1:${port}/v1/models`);
+    const modelsBody = await modelsResponse.json();
+    assert.equal(
+      modelsBody.data.some((model) => model.id === "deepseek-v4-flash-vision-exp"),
+      true,
+    );
+
+    const response = await originalFetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-opencode-key",
+      },
+      body: JSON.stringify({
+        model: "deepseek-v4-flash-vision-exp",
+        max_tokens: 64,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe this image" },
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: "image/webp",
+                  data: "UklGRg==",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const responseBody = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(responseBody.content[0].text, "vision ok");
+    assert.equal(upstreamCalls, 1);
+    assert.equal(upstreamUrl, "https://opencode.ai/zen/go/v1/chat/completions");
+    assert.equal(upstreamAuthorization, "Bearer test-opencode-key");
+    assert.deepEqual(upstreamPayload.messages[0].content[1], {
+      type: "image_url",
+      image_url: { url: "data:image/webp;base64,UklGRg==" },
+    });
+
+    const rejected = await originalFetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-opencode-key",
+      },
+      body: JSON.stringify({
+        model: "deepseek-v4-flash",
+        max_tokens: 64,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "iVBORw==" },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const rejectedBody = await rejected.json();
+    assert.equal(rejected.status, 400);
+    assert.match(rejectedBody.error.message, /does not support image input/);
+    assert.equal(upstreamCalls, 1, "invalid image requests must not reach the upstream");
+
+    const malformedToolImage = await originalFetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-opencode-key",
+      },
+      body: JSON.stringify({
+        model: "deepseek-v4-flash-vision-exp",
+        max_tokens: 64,
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "call_bad_image", name: "Screenshot", input: {} }],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "call_bad_image",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: 123 },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const malformedToolImageBody = await malformedToolImage.json();
+    assert.equal(malformedToolImage.status, 400);
+    assert.match(malformedToolImageBody.error.message, /invalid base64 data/);
+    assert.equal(upstreamCalls, 1, "malformed tool images must not reach the upstream");
+  } finally {
+    global.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("tool_choice auto is passed through while DeepSeek forced tool choice is softened", () => {
   const autoPayload = bridge.anthropicToOpenAi(
     {
@@ -532,7 +945,20 @@ test("Claude Code thinking and effort fields are translated from the request bod
     false,
   );
 
-  assert.equal(highPayload.reasoning_effort, "max");
+  assert.equal(highPayload.reasoning_effort, "high");
+
+  const adaptiveLowPayload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [{ role: "user", content: "inspect carefully" }],
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
+    },
+    false,
+  );
+
+  assert.deepEqual(adaptiveLowPayload.thinking, { type: "enabled" });
+  assert.equal(adaptiveLowPayload.reasoning_effort, "low");
 });
 
 test("thinking and reasoning_effort are not sent to non-DeepSeek models", () => {
@@ -741,7 +1167,7 @@ test("streamOpenAiAsAnthropic marks interrupted streams", async () => {
 
 test("createServer returns 413 when request body is too large", async () => {
   const originalLimit = process.env.CLAUDE_OPENCODE_REQUEST_BODY_LIMIT_BYTES;
-  process.env.CLAUDE_OPENCODE_REQUEST_BODY_LIMIT_BYTES = "1";
+  process.env.CLAUDE_OPENCODE_REQUEST_BODY_LIMIT_BYTES = "4";
 
   const serverPath = require.resolve("../server.js");
   delete require.cache[serverPath];
@@ -757,7 +1183,7 @@ test("createServer returns 413 when request body is too large", async () => {
         "content-type": "application/json",
         "x-api-key": "unused",
       },
-      body: "{}",
+      body: JSON.stringify("界"),
     });
     const body = await response.json();
     assert.equal(response.status, 413);

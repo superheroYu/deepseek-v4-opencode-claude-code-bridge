@@ -73,6 +73,7 @@ bridge 转换如下：
 | Anthropic Messages API | ⇄ | OpenAI 兼容 Chat Completions |
 | --- | :---: | --- |
 | `messages[].content`（文本 / `tool_use` / `tool_result`） | → | `messages` 的 `role=user/assistant/tool` |
+| 用户 `image` source（`base64` / `url`） | → | 用户 `image_url` block（data URL / `http(s)` URL） |
 | `tools[{ name, description, input_schema }]` | → | `tools[{ type: "function", function: { name, description, parameters } }]` |
 | `tool_choice` | → | 必要时柔化为 system 指令 |
 | SSE `message_*` / `content_block_*` 事件 | → | 流式 chat completion chunk |
@@ -93,17 +94,20 @@ bridge 转换如下：
 
 - Claude Code `/v1/messages` 非流式 + 流式
 - 文本内容
+- 白名单视觉模型的用户图片输入：图文混合、纯图和多图
 - Claude Code 工具调用和工具结果
 - OpenAI 兼容 function calling
 - DeepSeek V4 工具调用历史的 `reasoning_content` 回放
 - **已验证**：OpenCode Go DeepSeek V4 Pro / Flash
+- **实验性 / opt-in**：`deepseek-v4-flash-vision-exp`
 - **实验性**：其他 OpenCode Go `/v1/chat/completions` 模型
 - Windows、Linux、macOS（Node.js 运行时）
 
 </td>
 <td valign="top">
 
-- 图片、音频、prompt caching、Anthropic beta 字段
+- 音频、prompt caching、Anthropic beta 字段
+- Anthropic Files API 图片 source、图像生成和图像输出
 - 强制 `tool_choice`（会柔化为 system 指令）
 - 非 DeepSeek 模型的 reasoning 回放（默认关闭）
 - Anthropic 签名过的 thinking blocks（使用空 `signature`）
@@ -188,7 +192,11 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
   },
   "models": [
     "deepseek-v4-pro[1m]",
-    "deepseek-v4-flash"
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp"
+  ],
+  "visionModels": [
+    "deepseek-v4-flash-vision-exp"
   ],
   "reasoningContent": "auto",
   "reasoningCacheMaxEntries": 0,
@@ -210,6 +218,7 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
 | `listen.port` | 本地监听端口。 |
 | `upstream.baseUrl` | OpenAI 兼容上游 base URL。OpenCode Go 使用 `https://opencode.ai/zen/go/v1`。 |
 | `models` | 本地 `/v1/models` 返回的模型 ID。 |
+| `visionModels` | 允许接收图片内容的精确模型 ID。请保持为严格的白名单。 |
 | `reasoningContent` | `auto` / `always` / `never`。OpenCode Go 建议保持 `auto`，只对 DeepSeek 模型名回放 reasoning 历史。 |
 | `reasoningCacheMaxEntries` | 每个 reasoning cache bucket 的最大条目数。默认 `0` 表示不按条目数裁剪。 |
 | `reasoningCacheMaxAgeMs` | cache 条目自最近一次使用后的最长保留时间。默认 `30 天`。设为 `0` 关闭按时间裁剪。 |
@@ -430,9 +439,45 @@ claude -p "Reply OK only" --max-turns 1 --settings ~/.claude/settings.opencode-p
 
 `CLAUDE_CODE_EFFORT_LEVEL=max` 会让 Claude Code 对所选后端使用最高可用推理努力。如果你更希望响应速度快一些，可以降低或删除它。实际使用中，思考强度不是一个精确可控的旋钮：Claude Code 的会话状态、`/effort`、`effortLevel` 和 `CLAUDE_CODE_EFFORT_LEVEL` 可能互相影响，而 DeepSeek/OpenCode Go 也可能对最终值做归一化。更准确地说，它是“请求的思考强度提示”，不是严格保证的后端档位。
 
-当 Claude Code 在请求体里带上 Anthropic 格式的 `thinking` 和 `output_config.effort` 字段时，bridge 会把它们翻译成 DeepSeek/OpenAI 兼容的 `thinking` 和 `reasoning_effort`，但只对 DeepSeek 模型名这样做。bridge 不会从 `config.json` 强行开启 thinking；单次会话里的 `/effort` 仍然由 Claude Code 自己控制。根据 DeepSeek 的 thinking mode 文档，思考模式默认开启，Claude Code/OpenCode 这类复杂 Agent 请求可能会被按 max effort 的思考请求处理。实际使用中，`/effort` 和 `effortLevel` 会影响 Claude Code 请求的思考强度，但不能保证后端严格按这个档位执行；它们也不是唯一的 thinking 开关。如果 Claude Code 没有发送 `thinking` 字段，bridge 会让 DeepSeek 使用自己的默认行为。为了匹配 DeepSeek V4 的兼容行为，`low` 和 `medium` effort 会按 `high` 发送，`xhigh` 会按 `max` 发送。
+当 Claude Code 在请求体里带上 Anthropic 格式的 `thinking` 和 `output_config.effort` 字段时，bridge 会把它们翻译成 DeepSeek/OpenAI 兼容的 `thinking` 和 `reasoning_effort`，但只对 DeepSeek 模型名这样做。Claude Code 的 `adaptive` thinking 类型会映射为 DeepSeek 的 `enabled`。bridge 不会从 `config.json` 强行开启 thinking；单次会话里的 `/effort` 仍然由 Claude Code 自己控制。根据 DeepSeek 的 thinking mode 文档，思考模式默认开启。实际使用中，`/effort` 和 `effortLevel` 会影响 Claude Code 请求的思考强度，但不能保证后端严格按这个档位执行。如果 Claude Code 没有发送 `thinking` 字段，bridge 会让 DeepSeek 使用自己的默认行为。按照 DeepSeek 当前映射，`low` 保持为 `low`，`medium` 和 `xhigh` 按 `high` 发送，`max` 保持为 `max`。
 
 当 DeepSeek 返回 `reasoning_content` 时，bridge 会把它包装成 Anthropic 兼容的 `thinking` content block，让 Claude Code 可以显示思考内容。同一份 reasoning 也会继续缓存起来，用于后续 DeepSeek 工具调用历史回放。
+
+**实验性视觉模型**
+
+`deepseek-v4-flash-vision-exp` 是需要主动选择的实验性视觉理解模型。默认模型列表已经提供它，但它**不会**替换 Pro/Flash，也不会自动接管默认请求。OpenCode Go 使用原始模型 ID `deepseek-v4-flash-vision-exp`，不要加 `opencode-go/` 前缀。
+
+如果使用自定义 `config.json`，需要同时公布该模型并明确允许它接收图片：
+
+```json
+{
+  "models": [
+    "deepseek-v4-pro[1m]",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp"
+  ],
+  "visionModels": [
+    "deepseek-v4-flash-vision-exp"
+  ]
+}
+```
+
+然后在 Claude Code 的模型选择器或 `/model` 中为当前会话选择它；也可以在 Claude Code settings 中把它设为主模型：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_MODEL": "deepseek-v4-flash-vision-exp",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
+  }
+}
+```
+
+bridge 接受 **user message** 中的 Anthropic `image` block，支持 `source.type: "base64"` 和使用 `http(s)` 的 `source.type: "url"`，并把它们转换为 OpenAI 兼容 Chat Completions 的 `image_url` block。文本和图片顺序会保留，支持图文混合、纯图和多图请求。嵌套在 `tool_result.content` 中的图片会在必需的 tool message 之后，以合法的 user 图片消息发送。本版本不支持 Anthropic `source.type: "file"` / Files API 引用。
+
+只有列入 `visionModels` 的模型可以接收图片。向 Pro、普通 Flash 或其他非视觉模型发送图片时，bridge 会明确返回 `400`，不会静默丢图。这是**图片输入、文本输出**能力；bridge 不生成或返回图片。
+
+DeepSeek 当前支持 JPEG、PNG、GIF 和 WebP。通过 OpenCode Go 调用时仍受 DeepSeek 上游限制：请求体最大 `48 MiB`，单张 base64 或外部 URL 图片最大 `32 MiB`，每个请求最多 `600` 张图片。bridge 的 `requestBodyLimitBytes` 配置不会提高这些上游限制。
 
 **实验其他模型**
 
@@ -609,7 +654,7 @@ OpenCode Go 通过 `/v1/chat/completions` 暴露许多模型，包括 GLM、Kimi
 
 | 系列 | 模型 |
 | --- | --- |
-| 🧠 DeepSeek | `deepseek-v4-pro[1m]`、`deepseek-v4-flash` |
+| 🧠 DeepSeek | `deepseek-v4-pro[1m]`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`（实验性视觉模型） |
 | 🌌 GLM | `glm-5.1`、`glm-5` |
 | 🌙 Kimi | `kimi-k2.6`、`kimi-k2.5` |
 | 🎭 MiMo | `mimo-v2-pro`、`mimo-v2-omni`、`mimo-v2.5-pro`、`mimo-v2.5` |
@@ -637,6 +682,7 @@ OpenCode Go 通过 `/v1/chat/completions` 暴露许多模型，包括 GLM、Kimi
 
 - 📘 [OpenCode Go 文档](https://opencode.ai/docs/zh-cn/go/) —— OpenCode Go 的模型 ID、API endpoint 和 AI SDK provider 说明。
 - 📗 [DeepSeek API 文档](https://api-docs.deepseek.com/zh-cn/) —— DeepSeek 官方 API 概览。
+- 👁️ [DeepSeek Vision 文档](https://api-docs.deepseek.com/guides/vision/) —— `deepseek-v4-flash-vision-exp` 的官方图片格式、请求结构、限制与约束。
 - 🧠 [DeepSeek thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode) —— `reasoning_content` 行为以及 thinking 模式工具调用历史的回传要求。
 - 🔧 [DeepSeek Tool Calls 文档](https://api-docs.deepseek.com/zh-cn/guides/tool_calls) —— DeepSeek function/tool calling 行为。
 - 🤖 [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages) —— Claude 兼容客户端期望的 `/v1/messages` 协议结构。

@@ -5,7 +5,19 @@ const os = require("os");
 const path = require("path");
 
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1";
-const DEFAULT_MODELS = ["deepseek-v4-pro[1m]", "deepseek-v4-flash"];
+const DEEPSEEK_VISION_MODEL = "deepseek-v4-flash-vision-exp";
+const DEFAULT_MODELS = ["deepseek-v4-pro[1m]", "deepseek-v4-flash", DEEPSEEK_VISION_MODEL];
+const DEFAULT_VISION_MODELS = [DEEPSEEK_VISION_MODEL];
+const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+const MAX_IMAGE_URL_LENGTH = 8192;
+const MAX_INLINE_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_INLINE_IMAGE_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_IMAGES_PER_REQUEST = 600;
 const DEFAULT_REASONING_CACHE_PATH = path.join(
   os.homedir(),
   ".claude",
@@ -163,6 +175,9 @@ function loadConfig() {
     models: Array.isArray(fileConfig.models) && fileConfig.models.length
       ? fileConfig.models
       : DEFAULT_MODELS,
+    visionModels: Array.isArray(fileConfig.visionModels)
+      ? fileConfig.visionModels
+      : DEFAULT_VISION_MODELS,
   };
 }
 
@@ -398,7 +413,7 @@ function toolUseSignature(tool) {
 }
 
 function toolResultSignature(result) {
-  return `tool_result:${result.tool_use_id || result.id || ""}:${stringifyToolResultContent(result.content)}`;
+  return `tool_result:${result.tool_use_id || result.id || ""}:${toolResultSignatureContent(result.content)}`;
 }
 
 function toolContextKey(parts, assistantText) {
@@ -432,9 +447,10 @@ function currentToolContextParts(messages) {
           .join("\n");
     const toolResults = blocks.filter((block) => block && block.type === "tool_result");
     const toolUses = blocks.filter((block) => block && block.type === "tool_use");
+    const hasDirectImage = blocks.some((block) => block && block.type === "image");
 
     if (msg && msg.role === "user") {
-      if (!toolResults.length && text) {
+      if (!toolResults.length && (text || hasDirectImage)) {
         hadToolCall = false;
         parts = [];
       }
@@ -471,6 +487,7 @@ function sendError(res, status, message, type = "invalid_request_error") {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
+    let receivedBytes = 0;
     let done = false;
 
     function cleanup() {
@@ -490,7 +507,8 @@ function readBody(req) {
     function onData(chunk) {
       if (done) return;
       data += chunk;
-      if (data.length > CONFIG.requestBodyLimitBytes) {
+      receivedBytes += Buffer.byteLength(chunk, "utf8");
+      if (receivedBytes > CONFIG.requestBodyLimitBytes) {
         const error = new Error("Request body exceeds requestBodyLimitBytes.");
         error.status = 413;
         error.type = "invalid_request_error";
@@ -549,23 +567,183 @@ function thinkingFromAnthropicContent(content) {
     .join("\n");
 }
 
-function stringifyToolResultContent(content) {
+function invalidRequestError(message) {
+  const error = new Error(message);
+  error.status = 400;
+  error.type = "invalid_request_error";
+  return error;
+}
+
+function imageBlocksFromContent(content) {
+  if (!Array.isArray(content)) return [];
+  return content.filter((block) => block && block.type === "image");
+}
+
+function compactBase64(data) {
+  if (typeof data !== "string") return null;
+  const compact = data.replace(/\s+/g, "");
+  if (
+    !compact ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)
+  ) {
+    return null;
+  }
+  return compact;
+}
+
+function decodedBase64Size(data) {
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  return (data.length * 3) / 4 - padding;
+}
+
+function registerImage(imageState, inlineBytes = 0) {
+  imageState.count += 1;
+  if (imageState.count > MAX_IMAGES_PER_REQUEST) {
+    throw invalidRequestError(
+      `Image count exceeds DeepSeek's limit of ${MAX_IMAGES_PER_REQUEST} images per request.`,
+    );
+  }
+  if (inlineBytes > MAX_INLINE_IMAGE_BYTES) {
+    throw invalidRequestError("Inline image exceeds DeepSeek's 32 MiB per-image limit.");
+  }
+  imageState.inlineBytes += inlineBytes;
+  if (imageState.inlineBytes > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+    throw invalidRequestError("Inline images exceed DeepSeek's 64 MiB total-image limit.");
+  }
+}
+
+function anthropicImageToOpenAi(block, model, imageState) {
+  if (!isVisionModel(model)) {
+    throw invalidRequestError(
+      `Model ${JSON.stringify(model || "")} does not support image input through this bridge. ` +
+        `Use ${DEEPSEEK_VISION_MODEL}.`,
+    );
+  }
+
+  const source = block && block.source;
+  if (!source || typeof source !== "object") {
+    throw invalidRequestError("Anthropic image blocks require a source object.");
+  }
+
+  if (source.type === "base64") {
+    const mediaType = String(source.media_type || "").toLowerCase();
+    if (!SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+      throw invalidRequestError(
+        `Unsupported image media_type ${JSON.stringify(source.media_type || "")}. ` +
+          "Supported types: image/jpeg, image/png, image/gif, image/webp.",
+      );
+    }
+    const data = compactBase64(source.data);
+    if (!data) {
+      throw invalidRequestError("Anthropic base64 image source contains invalid base64 data.");
+    }
+    registerImage(imageState, decodedBase64Size(data));
+    return {
+      type: "image_url",
+      image_url: { url: `data:${mediaType};base64,${data}` },
+    };
+  }
+
+  if (source.type === "url") {
+    if (typeof source.url !== "string" || !source.url.trim()) {
+      throw invalidRequestError("Anthropic URL image source requires a non-empty url.");
+    }
+    const url = source.url.trim();
+    if (url.length > MAX_IMAGE_URL_LENGTH) {
+      throw invalidRequestError("Image URL exceeds DeepSeek's 8192-character limit.");
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw invalidRequestError("Image URL must be a valid public http(s) URL.");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw invalidRequestError("Image URL must use http or https.");
+    }
+    registerImage(imageState);
+    return { type: "image_url", image_url: { url } };
+  }
+
+  if (source.type === "file") {
+    throw invalidRequestError(
+      "Anthropic image source.type=file is not supported because this bridge does not proxy DeepSeek's Files API. " +
+        "Use a base64 or public URL image source.",
+    );
+  }
+
+  throw invalidRequestError(
+    `Unsupported Anthropic image source type ${JSON.stringify(source.type || "")}.`,
+  );
+}
+
+function toolResultTextContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content ?? "");
+  const hasImages = imageBlocksFromContent(content).length > 0;
+  const text = content
+    .map((block) => {
+      if (!block) return "";
+      if (block.type === "text") return block.text || "";
+      if (block.type === "image") return "";
+      return JSON.stringify(block);
+    })
+    .filter(Boolean)
+    .join("\n");
+  const imageNotice = hasImages ? "[Image content is provided in the following user message.]" : "";
+  return [text, imageNotice].filter(Boolean).join("\n");
+}
+
+function toolResultSignatureContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return JSON.stringify(content ?? "");
   return content
     .map((block) => {
       if (!block) return "";
       if (block.type === "text") return block.text || "";
-      return JSON.stringify(block);
+      if (block.type !== "image") return JSON.stringify(block);
+      const source = block.source && typeof block.source === "object" ? block.source : {};
+      if (source.type === "base64") {
+        const data = typeof source.data === "string" ? source.data : JSON.stringify(source.data ?? "");
+        return `image:base64:${source.media_type || ""}:${sha256(data)}`;
+      }
+      if (source.type === "url") return `image:url:${sha256(String(source.url || ""))}`;
+      if (source.type === "file") {
+        return `image:file:${sha256(String(source.file_id || source.id || ""))}`;
+      }
+      return `image:${source.type || "unknown"}`;
     })
     .filter(Boolean)
     .join("\n");
 }
 
+function anthropicUserContentToOpenAi(blocks, model, imageState) {
+  const content = [];
+  let hasImage = false;
+  for (const block of blocks || []) {
+    if (!block) continue;
+    if (block.type === "text" && typeof block.text === "string" && block.text) {
+      content.push({ type: "text", text: block.text });
+    } else if (block.type === "image") {
+      hasImage = true;
+      content.push(anthropicImageToOpenAi(block, model, imageState));
+    }
+  }
+  if (!content.length) return null;
+  if (hasImage) return content;
+  return content.map((block) => block.text).join("\n");
+}
+
 function systemToOpenAi(system) {
   if (!system) return null;
   if (typeof system === "string") return system;
-  if (Array.isArray(system)) return textFromAnthropicContent(system);
+  if (Array.isArray(system)) {
+    if (imageBlocksFromContent(system).length) {
+      throw invalidRequestError("DeepSeek Vision only accepts images in user messages, not system content.");
+    }
+    return textFromAnthropicContent(system);
+  }
   return String(system);
 }
 
@@ -580,10 +758,19 @@ function isDeepSeekModel(model) {
   return typeof model === "string" && /(^|[-_/])deepseek/i.test(model);
 }
 
-function anthropicMessagesToOpenAi(messages, includeReasoningContent) {
+function isVisionModel(model) {
+  if (typeof model !== "string") return false;
+  const normalized = model.toLowerCase();
+  return CONFIG.visionModels.some(
+    (candidate) => typeof candidate === "string" && candidate.toLowerCase() === normalized,
+  );
+}
+
+function anthropicMessagesToOpenAi(messages, includeReasoningContent, model) {
   const out = [];
   let currentUserTurnHadToolCall = false;
   let currentToolContext = [];
+  const imageState = { count: 0, inlineBytes: 0 };
 
   for (const msg of messages || []) {
     if (!msg || !msg.role) continue;
@@ -595,6 +782,12 @@ function anthropicMessagesToOpenAi(messages, includeReasoningContent) {
     }
 
     const blocks = Array.isArray(msg.content) ? msg.content : [];
+    const directImages = imageBlocksFromContent(blocks);
+    if (msg.role !== "user" && directImages.length) {
+      throw invalidRequestError(
+        `DeepSeek Vision only accepts images in user messages, not ${msg.role} messages.`,
+      );
+    }
     const text = blocks
       .filter((block) => block && block.type === "text" && typeof block.text === "string")
       .map((block) => block.text)
@@ -605,24 +798,54 @@ function anthropicMessagesToOpenAi(messages, includeReasoningContent) {
     const toolUses = blocks.filter((block) => block && block.type === "tool_use");
 
     if (msg.role === "user") {
+      const directUserBlocks = blocks.filter(
+        (block) => block && (block.type === "text" || block.type === "image"),
+      );
+      const directUserContent = anthropicUserContentToOpenAi(
+        directUserBlocks,
+        model,
+        imageState,
+      );
       if (toolResults.length) {
+        const forwardedToolImages = [];
         for (const result of toolResults) {
           if (currentUserTurnHadToolCall) currentToolContext.push(toolResultSignature(result));
+          const resultId = result.tool_use_id || result.id || "call_unknown";
           out.push({
             role: "tool",
-            tool_call_id: result.tool_use_id || result.id || "call_unknown",
-            content: stringifyToolResultContent(result.content),
+            tool_call_id: resultId,
+            content: toolResultTextContent(result.content),
           });
+          const resultImages = imageBlocksFromContent(result.content);
+          if (resultImages.length) {
+            forwardedToolImages.push({
+              type: "text",
+              text: `Image content returned by tool ${JSON.stringify(resultId)}:`,
+            });
+            for (const image of resultImages) {
+              forwardedToolImages.push(anthropicImageToOpenAi(image, model, imageState));
+            }
+          }
         }
-        if (text) {
+        if (forwardedToolImages.length) {
+          const followUpContent = [...forwardedToolImages];
+          if (Array.isArray(directUserContent)) {
+            followUpContent.push(...directUserContent);
+          } else if (directUserContent) {
+            followUpContent.push({ type: "text", text: directUserContent });
+          }
+          out.push({ role: "user", content: followUpContent });
+        } else if (directUserContent) {
+          out.push({ role: "user", content: directUserContent });
+        }
+        if (directUserContent) {
           currentUserTurnHadToolCall = false;
           currentToolContext = [];
-          out.push({ role: "user", content: text });
         }
       } else {
         currentUserTurnHadToolCall = false;
         currentToolContext = [];
-        if (text) out.push({ role: "user", content: text });
+        if (directUserContent) out.push({ role: "user", content: directUserContent });
       }
       continue;
     }
@@ -832,18 +1055,20 @@ function thinkingToOpenAi(thinking) {
   if (thinking.type === "enabled" || thinking.type === "disabled") {
     return { type: thinking.type };
   }
+  if (thinking.type === "adaptive") return { type: "enabled" };
   return undefined;
 }
 
 function reasoningEffortToOpenAi(outputConfig) {
   // Claude Code may send Anthropic-format output_config.effort. DeepSeek V4's
-  // OpenAI-compatible API accepts high/max and maps low/medium to high itself;
-  // we normalize here so the upstream payload is explicit and stable.
+  // current OpenAI-compatible API maps medium/xhigh to high while preserving
+  // the explicit low and max tiers. Normalize here for a stable payload.
   const effort = outputConfig && typeof outputConfig === "object" ? outputConfig.effort : undefined;
   if (typeof effort !== "string") return undefined;
   const normalized = effort.toLowerCase();
-  if (normalized === "max" || normalized === "xhigh") return "max";
-  if (normalized === "high" || normalized === "medium" || normalized === "low") return "high";
+  if (normalized === "max") return "max";
+  if (normalized === "low") return "low";
+  if (normalized === "high" || normalized === "medium" || normalized === "xhigh") return "high";
   return undefined;
 }
 
@@ -853,7 +1078,13 @@ function anthropicToOpenAi(body, stream) {
   const extraSystem = toolChoiceInstruction(body.tool_choice, body.model);
   const system = [systemToOpenAi(body.system), extraSystem].filter(Boolean).join("\n\n");
   if (system) messages.push({ role: "system", content: system });
-  messages.push(...anthropicMessagesToOpenAi(body.messages, shouldSendReasoningContent(body.model)));
+  messages.push(
+    ...anthropicMessagesToOpenAi(
+      body.messages,
+      shouldSendReasoningContent(body.model),
+      body.model,
+    ),
+  );
 
   const payload = {
     model: body.model,
@@ -1550,6 +1781,7 @@ module.exports = {
   expandHome,
   flushReasoningCache,
   getToolReasoning,
+  isVisionModel,
   loadReasoningCache,
   mapFinishReason,
   normalizeBaseUrl,
