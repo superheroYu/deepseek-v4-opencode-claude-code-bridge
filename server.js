@@ -581,14 +581,11 @@ function imageBlocksFromContent(content) {
 
 function compactBase64(data) {
   if (typeof data !== "string") return null;
-  const compact = data.replace(/\s+/g, "");
-  if (
-    !compact ||
-    compact.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)
-  ) {
-    return null;
-  }
+  let compact = data.replace(/\s+/g, "");
+  if (!compact || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+  const remainder = compact.length % 4;
+  if (remainder === 1) return null;
+  if (remainder) compact += "=".repeat(4 - remainder);
   return compact;
 }
 
@@ -615,9 +612,15 @@ function registerImage(imageState, inlineBytes = 0) {
 
 function anthropicImageToOpenAi(block, model, imageState) {
   if (!isVisionModel(model)) {
+    const configuredVisionModels = CONFIG.visionModels.filter(
+      (candidate) => typeof candidate === "string" && candidate,
+    );
+    const modelHint = configuredVisionModels.length
+      ? `Use a model listed in visionModels: ${configuredVisionModels.map(JSON.stringify).join(", ")}.`
+      : "Add a compatible model ID to visionModels before sending images.";
     throw invalidRequestError(
       `Model ${JSON.stringify(model || "")} does not support image input through this bridge. ` +
-        `Use ${DEEPSEEK_VISION_MODEL}.`,
+        modelHint,
     );
   }
 

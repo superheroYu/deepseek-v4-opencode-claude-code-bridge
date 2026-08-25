@@ -332,6 +332,15 @@ test("vision image validation enforces media type, URL protocol, length, and cou
       false,
     );
 
+  const unpaddedPayload = convertImage({
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: "TQ" },
+  });
+  assert.equal(
+    unpaddedPayload.messages[0].content[0].image_url.url,
+    "data:image/png;base64,TQ==",
+  );
+
   assert.throws(
     () =>
       convertImage({
@@ -339,6 +348,42 @@ test("vision image validation enforces media type, URL protocol, length, and cou
         source: { type: "base64", media_type: "image/svg+xml", data: "PHN2Zz4=" },
       }),
     /Unsupported image media_type/,
+  );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "TQ$" },
+      }),
+    /invalid base64 data/,
+  );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "A" },
+      }),
+    /invalid base64 data/,
+  );
+  assert.throws(
+    () => convertImage({ type: "image" }),
+    /require a source object/,
+  );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "url", url: "   " },
+      }),
+    /requires a non-empty url/,
+  );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "url", url: "not a URL" },
+      }),
+    /valid public http\(s\) URL/,
   );
   assert.throws(
     () =>
@@ -356,11 +401,29 @@ test("vision image validation enforces media type, URL protocol, length, and cou
       }),
     /8192-character limit/,
   );
+  assert.throws(
+    () =>
+      convertImage({
+        type: "image",
+        source: { type: "bytes", data: "TQ==" },
+      }),
+    /Unsupported Anthropic image source type/,
+  );
 
-  const tooManyImages = Array.from({ length: 601 }, () => ({
+  const maximumImages = Array.from({ length: 600 }, () => ({
     type: "image",
     source: { type: "url", url: "https://example.com/image.png" },
   }));
+  const maximumPayload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [{ role: "user", content: maximumImages }],
+    },
+    false,
+  );
+  assert.equal(maximumPayload.messages[0].content.length, 600);
+
+  const tooManyImages = [...maximumImages, maximumImages[0]];
   assert.throws(
     () =>
       bridge.anthropicToOpenAi(
@@ -426,11 +489,66 @@ test("tool_result images follow contiguous tool messages as user image content",
   assert.match(payload.messages[1].content, /screenshot captured/);
   assert.match(payload.messages[1].content, /following user message/);
   assert.doesNotMatch(payload.messages[1].content, /iVBORw0KGgo/);
+  assert.equal(payload.messages[1].tool_call_id, "call_image");
   assert.equal(payload.messages[2].content, "file contents");
+  assert.equal(payload.messages[2].tool_call_id, "call_text");
   assert.deepEqual(payload.messages[3].content[1], {
     type: "image_url",
     image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
   });
+});
+
+test("tool_result images merge with direct multimodal user content", () => {
+  const payload = bridge.anthropicToOpenAi(
+    {
+      model: "deepseek-v4-flash-vision-exp",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call_merge", name: "Screenshot", input: {} }],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_merge",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "url", url: "https://example.com/tool.png" },
+                },
+              ],
+            },
+            { type: "text", text: "Compare the tool image with this reference." },
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "TQ" },
+            },
+          ],
+        },
+      ],
+    },
+    false,
+  );
+
+  assert.deepEqual(
+    payload.messages.map((message) => message.role),
+    ["assistant", "tool", "user"],
+  );
+  assert.equal(payload.messages[1].tool_call_id, "call_merge");
+  assert.deepEqual(payload.messages[2].content, [
+    { type: "text", text: 'Image content returned by tool "call_merge":' },
+    {
+      type: "image_url",
+      image_url: { url: "https://example.com/tool.png" },
+    },
+    { type: "text", text: "Compare the tool image with this reference." },
+    {
+      type: "image_url",
+      image_url: { url: "data:image/png;base64,TQ==" },
+    },
+  ]);
 });
 
 test("anthropicToOpenAi drops unfulfilled tool calls from broken history", () => {
