@@ -1517,3 +1517,94 @@ test("trim-reasoning-cache helper leaves small caches untouched", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("callOpenCode forwards caller OpenCode routing headers upstream", async () => {
+  const originalFetch = global.fetch;
+  let upstreamHeaders;
+  global.fetch = async (url, options) => {
+    upstreamHeaders = options.headers;
+    return new Response(
+      JSON.stringify({
+        id: "chatcmpl_routing",
+        model: "deepseek-v4.1-flash",
+        choices: [
+          { finish_reason: "stop", message: { role: "assistant", content: "ok" } },
+        ],
+        usage: { prompt_tokens: 3, completion_tokens: 2 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const server = bridge.createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await originalFetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-opencode-key",
+        "x-opencode-session": "session-abc",
+        "x-opencode-project": "project-def",
+      },
+      body: JSON.stringify({
+        model: "deepseek-v4.1-flash",
+        max_tokens: 64,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(upstreamHeaders["x-opencode-session"], "session-abc");
+    assert.equal(upstreamHeaders["x-opencode-project"], "project-def");
+  } finally {
+    global.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("callOpenCode omits routing headers the caller did not send", async () => {
+  const originalFetch = global.fetch;
+  let upstreamHeaders;
+  global.fetch = async (url, options) => {
+    upstreamHeaders = options.headers;
+    return new Response(
+      JSON.stringify({
+        id: "chatcmpl_routing_none",
+        model: "deepseek-v4.1-flash",
+        choices: [
+          { finish_reason: "stop", message: { role: "assistant", content: "ok" } },
+        ],
+        usage: { prompt_tokens: 3, completion_tokens: 2 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const server = bridge.createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+
+  try {
+    const response = await originalFetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "test-opencode-key",
+      },
+      body: JSON.stringify({
+        model: "deepseek-v4.1-flash",
+        max_tokens: 64,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal("x-opencode-session" in upstreamHeaders, false);
+  } finally {
+    global.fetch = originalFetch;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

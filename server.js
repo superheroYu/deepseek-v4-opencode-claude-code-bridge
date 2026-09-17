@@ -1245,6 +1245,24 @@ function requestProcessShutdown(server) {
   });
 }
 
+// OpenCode Go rejects requests without the caller's routing headers
+// ("MissingSessionID"), so pass them through to the upstream.
+const OPENCODE_ROUTING_HEADERS = [
+  "x-opencode-session",
+  "x-opencode-project",
+  "x-opencode-client",
+  "x-opencode-request",
+];
+
+function opencodeRoutingHeaders(req) {
+  const headers = {};
+  for (const name of OPENCODE_ROUTING_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string" && value) headers[name] = value;
+  }
+  return headers;
+}
+
 async function callOpenCode(req, payload, upstreamContext) {
   const upstreamApiKey = requestAuthToken(req);
   if (!upstreamApiKey) {
@@ -1258,6 +1276,7 @@ async function callOpenCode(req, payload, upstreamContext) {
     headers: {
       authorization: `Bearer ${upstreamApiKey}`,
       "content-type": "application/json",
+      ...opencodeRoutingHeaders(req),
     },
     signal: upstreamContext.signal,
     body: JSON.stringify(payload),
