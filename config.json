@@ -7,11 +7,15 @@
     "baseUrl": "https://opencode.ai/zen/go/v1"
   },
   "models": [
-    "deepseek-v4-pro[1m]",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
+    "deepseek-flash",
     "deepseek-v4-flash",
     "deepseek-v4-flash-vision-exp"
   ],
   "visionModels": [
+    "deepseek-v4.1-flash",
+    "deepseek-flash",
     "deepseek-v4-flash-vision-exp"
   ],
   "reasoningContent": "auto",

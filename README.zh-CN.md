@@ -97,9 +97,10 @@ bridge 转换如下：
 - 白名单视觉模型的用户图片输入：图文混合、纯图和多图
 - Claude Code 工具调用和工具结果
 - OpenAI 兼容 function calling
-- DeepSeek V4 工具调用历史的 `reasoning_content` 回放
-- **已验证**：OpenCode Go DeepSeek V4 Pro / Flash
-- **实验性 / opt-in**：`deepseek-v4-flash-vision-exp`
+- 含工具调用的 DeepSeek 会话中，assistant 历史的 `reasoning_content` 回放
+- **已验证图文输入**：`deepseek-v4.1-flash`（默认）和 `deepseek-flash`
+- **已验证多轮 thinking/工具调用**：`deepseek-v4.1-flash`
+- **兼容**：DeepSeek V4 Pro、旧 Flash 和 `deepseek-v4-flash-vision-exp`
 - **实验性**：其他 OpenCode Go `/v1/chat/completions` 模型
 - Windows、Linux、macOS（Node.js 运行时）
 
@@ -141,7 +142,7 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
 - **🗜️ 承受 Claude Code 对话压缩** —— 当 Claude Code 在压缩后仍保留近期 `tool_use`/`tool_result` 块时，bridge 仍能从本地缓存找回对应 reasoning。
 - **👀 可见 thinking** —— 流式 DeepSeek `reasoning_content` 会被包装成 Anthropic 兼容 `thinking` content block，让 Claude Code 可以显示思考内容。
 - **🧩 DeepSeek-aware 扩展字段** —— `thinking` 和 `reasoning_effort` 只会发给 DeepSeek 模型名，实验性接入其他 chat-completions 模型时不会被 DeepSeek 专用字段污染。
-- **🏷️ 贴合 OpenCode Go 模型 ID** —— 默认配置直接使用 OpenCode Go 的 DeepSeek V4 模型 ID，包括 `deepseek-v4-pro[1m]` 和 `deepseek-v4-flash`。
+- **🏷️ 贴合 OpenCode Go 模型 ID** —— 默认模型为 `deepseek-v4.1-flash`；仍可手动选择 `deepseek-v4-pro`。
 
 > [!TIP]
 > 如果你的目标是多 provider 聚合、团队管理、key 轮换或可视化后台，**通用网关**更合适。
@@ -191,11 +192,15 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
     "baseUrl": "https://opencode.ai/zen/go/v1"
   },
   "models": [
-    "deepseek-v4-pro[1m]",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
+    "deepseek-flash",
     "deepseek-v4-flash",
     "deepseek-v4-flash-vision-exp"
   ],
   "visionModels": [
+    "deepseek-v4.1-flash",
+    "deepseek-flash",
     "deepseek-v4-flash-vision-exp"
   ],
   "reasoningContent": "auto",
@@ -228,7 +233,7 @@ ccNexus、LiteLLM、New API、One API 等通用代理项目更适合做多 provi
 | `upstreamTimeoutMs` | 等待 OpenCode Go 上游请求的最长时间。默认 `10 分钟`。 |
 
 > [!IMPORTANT]
-> 默认模型使用 `deepseek-v4-pro[1m]` 这个 1M 上下文变体。如果你的 OpenCode Go 套餐不包含这个变体，请把 `config.json` 和 Claude Code settings 里的所有 `deepseek-v4-pro[1m]` 改成 `deepseek-v4-pro`。
+> v0.2.2 默认使用 `deepseek-v4.1-flash`。OpenCode 标注 V4.1 Flash 具有 1M token 上下文、最多 384K token 输出，并支持图文输入。如需 Pro，请选择 `deepseek-v4-pro`。`config.json` 应使用原始 API 模型 ID；`[1m]` 是可选的 Claude Code 客户端上下文标签，不属于 OpenCode Go 模型 ID，当前 Claude Code 会在发送 API 请求前去掉它。参见 [OpenCode V4.1 Flash 模型页面](https://opencode.ai/data/deepseek/deepseek-v4-1-flash)。
 
 ---
 
@@ -384,18 +389,21 @@ CONFIG_PATH=/path/to/config.json ./scripts/install-autostart-macos.sh
     "API_TIMEOUT_MS": "3000000",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
-    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-pro[1m]",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
+    "ANTHROPIC_MODEL": "deepseek-v4.1-flash",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4.1-flash",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4.1-flash",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4.1-flash",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4.1-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4.1-flash",
     "CLAUDE_CODE_EFFORT_LEVEL": "max"
   }
 }
 ```
 
-上面的示例沿用 DeepSeek 风格配置，通过 `ANTHROPIC_MODEL` 指定主模型。如果保留 `ANTHROPIC_MODEL`，那么在 Claude Code 里切换模型通常只对当前对话有效；新对话仍会回到 `ANTHROPIC_MODEL` 指定的模型。如果你希望 Claude Code 的模型切换器真正控制默认模型映射，请删除 `ANTHROPIC_MODEL`，然后在 Claude Code 的界面或 `/model` 命令里选择模型。Claude Code 会自己维护 `model` 字段。这样 `sonnet` 和 `opus` 会映射到 `deepseek-v4-pro[1m]`，`haiku` 和 small/fast 调用会映射到 `deepseek-v4-flash`。
+上面的示例通过 `ANTHROPIC_MODEL` 指定主模型，并把所有模型别名、small/fast 调用和子代理统一映射到 `deepseek-v4.1-flash`。如果保留 `ANTHROPIC_MODEL`，那么在 Claude Code 里切换模型通常只对当前对话有效；新对话仍会回到 `ANTHROPIC_MODEL` 指定的模型。如果你希望 Claude Code 的模型切换器控制默认模型映射，请删除 `ANTHROPIC_MODEL`，然后在 Claude Code 的界面或 `/model` 命令里选择模型。Claude Code 会自己维护 `model` 字段。Pro 仍可使用：为当前会话选择 `deepseek-v4-pro`，或把需要修改的模型字段设为该 ID。
+
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000` 用于向 Claude Code 声明 1M 客户端上下文窗口，上游模型 ID 仍保持原样。裸的自定义模型 ID 原本会使用 Claude Code 的 200K 默认窗口，已在 Claude Code 2.1.291 中验证。也可以在 Claude Code 的模型设置中使用 `[1m]` 标签，CLI 会在发送 API 请求前去掉它；本示例采用裸 ID 加显式窗口设置。参见 [Claude Code 网关/自定义模型窗口说明](https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id)。
 
 你可以把这份内容保存成单独的 settings 文件，然后通过 `--settings` 使用；也可以直接用同样内容覆盖 Claude Code 默认的 `~/.claude/settings.json`。直接覆盖默认 settings 通常更简单，因为它可以避免和旧的 `ANTHROPIC_AUTH_TOKEN` 或直连 provider 配置发生合并冲突。
 
@@ -437,45 +445,53 @@ claude -p "Reply OK only" --max-turns 1 --settings ~/.claude/settings.opencode-p
 > [!IMPORTANT]
 > 本地 bridge 请使用 `ANTHROPIC_API_KEY`，**不要**使用 `ANTHROPIC_AUTH_TOKEN`。Claude Code 会把 `ANTHROPIC_API_KEY` 作为 `x-api-key` 发送；默认情况下 bridge 会把这个 key 转发给 OpenCode Go。
 
+bridge 会向上游保留 Claude Code 原生的 `x-claude-code-session-id`、请求中的 `User-Agent`，以及调用方提供的 `x-opencode-session`、`x-opencode-project`、`x-opencode-client` 和 `x-opencode-request`。如果请求没有 User-Agent，则使用本项目的包名和版本号。bridge 不会伪造 session ID，也不会让不同会话共用一个固定 ID。
+
 `CLAUDE_CODE_EFFORT_LEVEL=max` 会让 Claude Code 对所选后端使用最高可用推理努力。如果你更希望响应速度快一些，可以降低或删除它。实际使用中，思考强度不是一个精确可控的旋钮：Claude Code 的会话状态、`/effort`、`effortLevel` 和 `CLAUDE_CODE_EFFORT_LEVEL` 可能互相影响，而 DeepSeek/OpenCode Go 也可能对最终值做归一化。更准确地说，它是“请求的思考强度提示”，不是严格保证的后端档位。
 
-当 Claude Code 在请求体里带上 Anthropic 格式的 `thinking` 和 `output_config.effort` 字段时，bridge 会把它们翻译成 DeepSeek/OpenAI 兼容的 `thinking` 和 `reasoning_effort`，但只对 DeepSeek 模型名这样做。Claude Code 的 `adaptive` thinking 类型会映射为 DeepSeek 的 `enabled`。bridge 不会从 `config.json` 强行开启 thinking；单次会话里的 `/effort` 仍然由 Claude Code 自己控制。根据 DeepSeek 的 thinking mode 文档，思考模式默认开启。实际使用中，`/effort` 和 `effortLevel` 会影响 Claude Code 请求的思考强度，但不能保证后端严格按这个档位执行。如果 Claude Code 没有发送 `thinking` 字段，bridge 会让 DeepSeek 使用自己的默认行为。按照 DeepSeek 当前映射，`low` 保持为 `low`，`medium` 和 `xhigh` 按 `high` 发送，`max` 保持为 `max`。
+当 Claude Code 在请求体里带上 Anthropic 格式的 `thinking` 和 `output_config.effort` 字段时，bridge 会把它们翻译成 DeepSeek/OpenAI 兼容的 `thinking` 和 `reasoning_effort`，但只对 DeepSeek 模型名这样做。Claude Code 的 `adaptive` thinking 类型会映射为 DeepSeek 的 `enabled`。bridge 不会从 `config.json` 强行开启 thinking；单次会话里的 `/effort` 仍然由 Claude Code 自己控制。根据 DeepSeek 的 thinking mode 文档，思考模式默认开启。如果 Claude Code 既未发送 thinking，也未发送 effort，bridge 会让 DeepSeek 使用自己的默认行为。effort 映射为：`minimal`/`low` → `low`，`medium`/`high`/`xhigh` → `high`，`max`/`ultra` → `max`；`none` 会关闭 thinking。这是请求字段的翻译，实际思考行为仍由上游决定。参见 [DeepSeek Chat Completion schema](https://api-docs.deepseek.com/api/create-chat-completion)。
 
-当 DeepSeek 返回 `reasoning_content` 时，bridge 会把它包装成 Anthropic 兼容的 `thinking` content block，让 Claude Code 可以显示思考内容。同一份 reasoning 也会继续缓存起来，用于后续 DeepSeek 工具调用历史回放。
+当 DeepSeek 返回 `reasoning_content` 时，bridge 会把它包装成 Anthropic 兼容的 `thinking` content block，让 Claude Code 可以显示思考内容。同一份 reasoning 也会继续缓存起来。回放包含工具调用的会话时，bridge 会为所有 assistant 消息恢复 reasoning，包括工具调用之间的纯文本 assistant 消息。普通 assistant 文本的缓存匹配按会话、模型和前置历史隔离，不会复用其他会话中相同文本的 reasoning；压缩后的历史无法匹配时，会使用兼容占位值。
 
-**实验性视觉模型**
+**原生视觉与旧模型兼容**
 
-`deepseek-v4-flash-vision-exp` 是需要主动选择的实验性视觉理解模型。默认模型列表已经提供它，但它**不会**替换 Pro/Flash，也不会自动接管默认请求。OpenCode Go 使用原始模型 ID `deepseek-v4-flash-vision-exp`，不要加 `opencode-go/` 前缀。
+默认的 `deepseek-v4.1-flash` 可以直接接收图文输入，无需切换到单独的视觉模型。`deepseek-flash` 也在默认视觉白名单内。旧 ID `deepseek-v4-flash-vision-exp` 保留兼容支持；`deepseek-v4-flash` 在本项目默认的 OpenCode Go 配置中仍按纯文本模型处理。
 
-如果使用自定义 `config.json`，需要同时公布该模型并明确允许它接收图片：
+请使用 provider 的原始模型 ID，不要加 `opencode-go/` 前缀。OpenCode Go 暴露 `deepseek-v4.1-flash`；DeepSeek 自有 API 的 V4.1 Flash 标准 ID 是 `deepseek-flash`。DeepSeek 的 [2026-09-10 更新日志](https://api-docs.deepseek.com/updates/) 说明，旧 Flash/实验视觉 ID 在**其自有 API** 中退役并重定向，Pro 仍保留服务。这并不意味着 OpenCode Go 采用了相同重定向策略；2026-10-06 检查的 Go `/models` 响应仍列出了这些旧 ID。
+
+如果使用自定义 `config.json`，请同时更新模型列表和图片白名单：
 
 ```json
 {
   "models": [
-    "deepseek-v4-pro[1m]",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
+    "deepseek-flash",
     "deepseek-v4-flash",
     "deepseek-v4-flash-vision-exp"
   ],
   "visionModels": [
+    "deepseek-v4.1-flash",
+    "deepseek-flash",
     "deepseek-v4-flash-vision-exp"
   ]
 }
 ```
 
-然后在 Claude Code 的模型选择器或 `/model` 中为当前会话选择它；也可以在 Claude Code settings 中把它设为主模型：
+随附的 Claude Code settings 已默认选择 V4.1 Flash。升级旧 settings 文件时，可以把主模型和 small/fast 模型都改为它：
 
 ```json
 {
   "env": {
-    "ANTHROPIC_MODEL": "deepseek-v4-flash-vision-exp",
-    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
+    "ANTHROPIC_MODEL": "deepseek-v4.1-flash",
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4.1-flash"
   }
 }
 ```
 
 bridge 接受 **user message** 中的 Anthropic `image` block，支持 `source.type: "base64"` 和使用 `http(s)` 的 `source.type: "url"`，并把它们转换为 OpenAI 兼容 Chat Completions 的 `image_url` block。文本和图片顺序会保留，支持图文混合、纯图和多图请求。嵌套在 `tool_result.content` 中的图片会在必需的 tool message 之后，以合法的 user 图片消息发送。本版本不支持 Anthropic `source.type: "file"` / Files API 引用。
 
-只有列入 `visionModels` 的模型可以接收图片。向 Pro、普通 Flash 或其他非视觉模型发送图片时，bridge 会明确返回 `400`，不会静默丢图。这是**图片输入、文本输出**能力；bridge 不生成或返回图片。
+只有列入 `visionModels` 的模型可以接收图片。向 Pro、旧 `deepseek-v4-flash` 或其他未列入白名单的模型发送图片时，bridge 会明确返回 `400`，不会静默丢图。这是**图片输入、文本输出**能力；bridge 不生成或返回图片。
 
 DeepSeek 当前支持 JPEG、PNG、GIF 和 WebP。通过 OpenCode Go 调用时仍受 DeepSeek 上游限制：请求体最大 `48 MiB`，单张 base64 或外部 URL 图片最大 `32 MiB`，每个请求最多 `600` 张图片。bridge 的 `requestBodyLimitBytes` 配置不会提高这些上游限制。
 
@@ -489,12 +505,12 @@ DeepSeek 当前支持 JPEG、PNG、GIF 和 WebP。通过 OpenCode Go 调用时�
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
     "ANTHROPIC_API_KEY": "sk-opencode-go-key",
     "ANTHROPIC_MODEL": "kimi-k2.6",
-    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash"
+    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4.1-flash"
   }
 }
 ```
 
-使用 Go API 原始模型 ID（例如 `deepseek-v4-pro[1m]` 或 `kimi-k2.6`），**不要**使用 OpenCode 应用里的 `opencode-go/<model-id>` 前缀。非 DeepSeek 模型在工具调用行为验证前都应视为 best-effort。
+使用 Go API 原始模型 ID（例如 `deepseek-v4.1-flash`、`deepseek-v4-pro` 或 `kimi-k2.6`），**不要**使用 OpenCode 应用里的 `opencode-go/<model-id>` 前缀。非 DeepSeek 模型在工具调用行为验证前都应视为 best-effort。
 
 ---
 
@@ -520,6 +536,8 @@ curl http://127.0.0.1:8787/health
 ```bash
 curl -H "x-api-key: sk-..." "http://127.0.0.1:8787/health?probe=upstream"
 ```
+
+该探测访问上游 `GET /models`，并透传与 chat 请求相同的调用方 header。模型列表探测成功，并不能保证 chat 请求的 session 路由或所选模型也能成功。
 
 ---
 
@@ -573,6 +591,13 @@ node --test
 <summary><b>OpenCode Go 返回 <code>401</code> 或 <code>403</code></b></summary>
 
 检查 Claude Code settings 是否使用 `ANTHROPIC_API_KEY` 填写 OpenCode Go key。这个 bridge 不使用 `ANTHROPIC_AUTH_TOKEN`，也要避免和全局 Claude 登录配置冲突。
+
+</details>
+
+<details>
+<summary><b>OpenCode Go 返回 <code>MissingSessionID</code></b></summary>
+
+更新 bridge 和 Claude Code 后，请重启 bridge 进程，让它加载更新后的源码。Windows 可以使用托盘菜单的 **Restart bridge**。bridge 重启后，再新建 Claude Code 会话。当前 Claude Code 会原生发送 `x-claude-code-session-id`，bridge v0.2.2 会连同 User-Agent 一起保留；请检查中间代理是否丢弃了这些 header。使用 OpenCode 客户端时，应保留它自己的 `x-opencode-*` header。不要配置一个全局固定 session ID，也不要每次请求生成新 ID，这两种方式都会破坏会话身份。
 
 </details>
 
@@ -650,11 +675,11 @@ OpenCode Go 通过 `/v1/chat/completions` 暴露许多模型，包括 GLM、Kimi
 
 ## 📚 OpenCode Go 说明
 
-根据 OpenCode Go 文档，这些 Go 模型使用 `/v1/chat/completions`，并提供 OpenAI 兼容或类似的 chat-completions 接口：
+这些 Go 模型使用 `/v1/chat/completions`，并提供 OpenAI 兼容或类似的接口。DeepSeek 一行来自 2026-10-06 检查的 OpenCode Go `/models` 响应；其他系列为 Go 文档中的示例：
 
 | 系列 | 模型 |
 | --- | --- |
-| 🧠 DeepSeek | `deepseek-v4-pro[1m]`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`（实验性视觉模型） |
+| 🧠 DeepSeek | `deepseek-v4.1-flash`（默认，图文）、`deepseek-v4-pro`、`deepseek-flash`（图文别名）、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`（旧视觉模型） |
 | 🌌 GLM | `glm-5.1`、`glm-5` |
 | 🌙 Kimi | `kimi-k2.6`、`kimi-k2.5` |
 | 🎭 MiMo | `mimo-v2-pro`、`mimo-v2-omni`、`mimo-v2.5-pro`、`mimo-v2.5` |
@@ -668,8 +693,8 @@ OpenCode Go 通过 `/v1/chat/completions` 暴露许多模型，包括 GLM、Kimi
 ```json
 {
   "models": [
-    "deepseek-v4-pro[1m]",
-    "deepseek-v4-flash",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-pro",
     "kimi-k2.6"
   ],
   "reasoningContent": "auto"
@@ -682,7 +707,9 @@ OpenCode Go 通过 `/v1/chat/completions` 暴露许多模型，包括 GLM、Kimi
 
 - 📘 [OpenCode Go 文档](https://opencode.ai/docs/zh-cn/go/) —— OpenCode Go 的模型 ID、API endpoint 和 AI SDK provider 说明。
 - 📗 [DeepSeek API 文档](https://api-docs.deepseek.com/zh-cn/) —— DeepSeek 官方 API 概览。
-- 👁️ [DeepSeek Vision 文档](https://api-docs.deepseek.com/guides/vision/) —— `deepseek-v4-flash-vision-exp` 的官方图片格式、请求结构、限制与约束。
+- 🆕 [DeepSeek API 更新日志](https://api-docs.deepseek.com/updates/) —— V4.1 Flash、标准模型 ID、DeepSeek 自有 API 的旧 ID 变更与 Pro 继续服务说明。
+- 📐 [OpenCode V4.1 Flash 模型页面](https://opencode.ai/data/deepseek/deepseek-v4-1-flash) —— 图文输入与上下文、输出限制。
+- 👁️ [DeepSeek Vision 文档](https://api-docs.deepseek.com/guides/vision/) —— 官方图片格式、请求结构、限制与约束。
 - 🧠 [DeepSeek thinking mode guide](https://api-docs.deepseek.com/guides/thinking_mode) —— `reasoning_content` 行为以及 thinking 模式工具调用历史的回传要求。
 - 🔧 [DeepSeek Tool Calls 文档](https://api-docs.deepseek.com/zh-cn/guides/tool_calls) —— DeepSeek function/tool calling 行为。
 - 🤖 [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages) —— Claude 兼容客户端期望的 `/v1/messages` 协议结构。

@@ -3,11 +3,21 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { name: PACKAGE_NAME, version: PACKAGE_VERSION } = require("./package.json");
 
 const DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1";
-const DEEPSEEK_VISION_MODEL = "deepseek-v4-flash-vision-exp";
-const DEFAULT_MODELS = ["deepseek-v4-pro[1m]", "deepseek-v4-flash", DEEPSEEK_VISION_MODEL];
-const DEFAULT_VISION_MODELS = [DEEPSEEK_VISION_MODEL];
+const DEFAULT_MODELS = [
+  "deepseek-v4.1-flash",
+  "deepseek-v4-pro",
+  "deepseek-flash",
+  "deepseek-v4-flash",
+  "deepseek-v4-flash-vision-exp",
+];
+const DEFAULT_VISION_MODELS = [
+  "deepseek-v4.1-flash",
+  "deepseek-flash",
+  "deepseek-v4-flash-vision-exp",
+];
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -30,6 +40,14 @@ const DEFAULT_REASONING_CACHE_MAX_SIZE_BYTES = 200 * 1024 * 1024;
 const DEFAULT_REQUEST_BODY_LIMIT_BYTES = 100 * 1024 * 1024;
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
 const CHAT_COMPLETIONS_RESPONSE_HEADERS = ["content-type", "cache-control"];
+const UPSTREAM_REQUEST_HEADERS = [
+  "x-opencode-session",
+  "x-opencode-project",
+  "x-opencode-client",
+  "x-opencode-request",
+  "x-claude-code-session-id",
+  "user-agent",
+];
 const warnedFinishReasons = new Set();
 
 function readJson(file) {
@@ -398,14 +416,59 @@ function getToolReasoning(id) {
   return getMapRecent(reasoningByToolCallId, id);
 }
 
-function getAssistantReasoning(text) {
-  return getMapRecent(reasoningByAssistantText, sha256(text));
+function getAssistantReasoning(text, scope = null) {
+  const key = scope ? sha256(`${scope}\n${text}`) : sha256(text);
+  return getMapRecent(reasoningByAssistantText, key);
 }
 
-function setAssistantReasoning(text, reasoning) {
+function setAssistantReasoning(text, reasoning, scope = null) {
   if (!text || !reasoning) return;
-  setMapRecent(reasoningByAssistantText, sha256(text), reasoning);
+  const key = scope ? sha256(`${scope}\n${text}`) : sha256(text);
+  setMapRecent(reasoningByAssistantText, key, reasoning);
   scheduleSaveReasoningCache();
+}
+
+function reasoningHistoryHash(scope) {
+  return scope ? crypto.createHash("sha256").update(`${scope}\n`) : null;
+}
+
+function reasoningContentForHash(content) {
+  const blocks = typeof content === "string"
+    ? [{ type: "text", text: content }]
+    : (Array.isArray(content) ? content : []);
+  return blocks
+    .filter(
+      (block) => block && block.type !== "thinking" && block.type !== "redacted_thinking",
+    )
+    .map((block) => {
+      // Cache breakpoints move between requests without changing their content.
+      const keys = Object.keys(block).filter((key) => key !== "cache_control").sort();
+      const entries = keys.map((key) => {
+        const value = block[key];
+        if (
+          block.type === "tool_result" && key === "content" &&
+          (typeof value === "string" || Array.isArray(value))
+        ) {
+          return [key, reasoningContentForHash(value)];
+        }
+        // Tool input is application data, including any cache_control field.
+        return [key, value];
+      });
+      return Object.fromEntries(entries);
+    });
+}
+
+function appendReasoningHistory(hash, message) {
+  if (!hash || !message || !message.role) return;
+  const content = reasoningContentForHash(message.content);
+  hash.update(JSON.stringify({ role: message.role, content })).update("\n");
+}
+
+function responseReasoningScope(messages, scope) {
+  const hash = reasoningHistoryHash(scope);
+  if (!hash) return null;
+  for (const message of messages || []) appendReasoningHistory(hash, message);
+  return hash.digest("hex");
 }
 
 function toolUseSignature(tool) {
@@ -416,18 +479,19 @@ function toolResultSignature(result) {
   return `tool_result:${result.tool_use_id || result.id || ""}:${toolResultSignatureContent(result.content)}`;
 }
 
-function toolContextKey(parts, assistantText) {
+function toolContextKey(parts, assistantText, scope = null) {
   if (!parts || !parts.length || !assistantText) return null;
-  return sha256(`${parts.join("\n")}\nassistant:${assistantText}`);
+  const prefix = scope ? `${scope}\n` : "";
+  return sha256(`${prefix}${parts.join("\n")}\nassistant:${assistantText}`);
 }
 
-function getToolContextReasoning(parts, assistantText) {
-  const key = toolContextKey(parts, assistantText);
+function getToolContextReasoning(parts, assistantText, scope = null) {
+  const key = toolContextKey(parts, assistantText, scope);
   return key ? getMapRecent(reasoningByToolContext, key) : null;
 }
 
-function setToolContextReasoning(parts, assistantText, reasoning) {
-  const key = toolContextKey(parts, assistantText);
+function setToolContextReasoning(parts, assistantText, reasoning, scope = null) {
+  const key = toolContextKey(parts, assistantText, scope);
   if (!key || !reasoning) return;
   setMapRecent(reasoningByToolContext, key, reasoning);
   scheduleSaveReasoningCache();
@@ -769,18 +833,46 @@ function isVisionModel(model) {
   );
 }
 
-function anthropicMessagesToOpenAi(messages, includeReasoningContent, model) {
+function anthropicMessagesToOpenAi(
+  messages,
+  includeReasoningContent,
+  model,
+  replayAllAssistantReasoning = false,
+  reasoningScope = null,
+) {
   const out = [];
   let currentUserTurnHadToolCall = false;
   let currentToolContext = [];
   const imageState = { count: 0, inlineBytes: 0 };
+  const historyHash = reasoningHistoryHash(reasoningScope);
 
   for (const msg of messages || []) {
     if (!msg || !msg.role) continue;
+    const assistantScope = historyHash ? historyHash.copy().digest("hex") : null;
+    appendReasoningHistory(historyHash, msg);
+    // Never recover an ordinary historical answer from a global text-only
+    // key: short answers can be identical in unrelated conversations.
+    const cachedAssistantReasoning = (text) => assistantScope
+      ? getAssistantReasoning(text, assistantScope)
+      : (!replayAllAssistantReasoning && currentUserTurnHadToolCall
+        ? getAssistantReasoning(text) : null);
 
     if (typeof msg.content === "string") {
-      if (msg.role === "user") currentUserTurnHadToolCall = false;
-      out.push({ role: msg.role, content: msg.content });
+      if (msg.role === "user") {
+        currentUserTurnHadToolCall = false;
+        currentToolContext = [];
+      }
+      const message = { role: msg.role, content: msg.content };
+      if (
+        msg.role === "assistant" && includeReasoningContent &&
+        (replayAllAssistantReasoning || currentUserTurnHadToolCall)
+      ) {
+        message.reasoning_content =
+          getToolContextReasoning(currentToolContext, msg.content, assistantScope) ||
+          cachedAssistantReasoning(msg.content) ||
+          PLACEHOLDER_REASONING;
+      }
+      out.push(message);
       continue;
     }
 
@@ -873,12 +965,12 @@ function anthropicMessagesToOpenAi(messages, includeReasoningContent, model) {
             .join("\n");
           assistant.reasoning_content = thinking || reasoning || PLACEHOLDER_REASONING;
         }
-      } else if (text && currentUserTurnHadToolCall) {
+      } else if (replayAllAssistantReasoning || (text && currentUserTurnHadToolCall)) {
         if (includeReasoningContent) {
           assistant.reasoning_content =
             thinking ||
-            getToolContextReasoning(currentToolContext, text) ||
-            getAssistantReasoning(text) ||
+            getToolContextReasoning(currentToolContext, text, assistantScope) ||
+            cachedAssistantReasoning(text) ||
             PLACEHOLDER_REASONING;
         }
       }
@@ -1063,21 +1155,21 @@ function thinkingToOpenAi(thinking) {
 }
 
 function reasoningEffortToOpenAi(outputConfig) {
-  // Claude Code may send Anthropic-format output_config.effort. DeepSeek V4's
-  // current OpenAI-compatible API maps medium/xhigh to high while preserving
-  // the explicit low and max tiers. Normalize here for a stable payload.
+  // Normalize the compatibility effort aliases documented by DeepSeek.
   const effort = outputConfig && typeof outputConfig === "object" ? outputConfig.effort : undefined;
   if (typeof effort !== "string") return undefined;
-  const normalized = effort.toLowerCase();
-  if (normalized === "max") return "max";
-  if (normalized === "low") return "low";
+  const normalized = effort.trim().toLowerCase();
+  if (normalized === "none") return "none";
+  if (normalized === "max" || normalized === "ultra") return "max";
+  if (normalized === "low" || normalized === "minimal") return "low";
   if (normalized === "high" || normalized === "medium" || normalized === "xhigh") return "high";
   return undefined;
 }
 
-function anthropicToOpenAi(body, stream) {
+function anthropicToOpenAi(body, stream, reasoningScope = null) {
   const messages = [];
   const sendDeepSeekExtensions = isDeepSeekModel(body.model);
+  const tools = anthropicToolsToOpenAi(body.tools);
   const extraSystem = toolChoiceInstruction(body.tool_choice, body.model);
   const system = [systemToOpenAi(body.system), extraSystem].filter(Boolean).join("\n\n");
   if (system) messages.push({ role: "system", content: system });
@@ -1086,6 +1178,10 @@ function anthropicToOpenAi(body, stream) {
       body.messages,
       shouldSendReasoningContent(body.model),
       body.model,
+      // With tools, DeepSeek requires reasoning for every assistant turn,
+      // including earlier text-only turns that did not invoke a tool.
+      Boolean(tools && tools.length),
+      reasoningScope,
     ),
   );
 
@@ -1097,7 +1193,7 @@ function anthropicToOpenAi(body, stream) {
     temperature: body.temperature,
     top_p: body.top_p,
     stop: body.stop_sequences,
-    tools: anthropicToolsToOpenAi(body.tools),
+    tools,
     tool_choice: anthropicToolChoiceToOpenAi(body.tool_choice, body.model),
     thinking: sendDeepSeekExtensions ? thinkingToOpenAi(body.thinking) : undefined,
     reasoning_effort: sendDeepSeekExtensions ? reasoningEffortToOpenAi(body.output_config) : undefined,
@@ -1153,7 +1249,7 @@ function mapFinishReason(reason) {
   return reason || "end_turn";
 }
 
-function openAiToAnthropic(body, originalModel, toolContextParts = []) {
+function openAiToAnthropic(body, originalModel, toolContextParts = [], reasoningScope = null) {
   const choice = body.choices && body.choices[0] ? body.choices[0] : {};
   const message = choice.message || {};
   const reasoning = reasoningFromMessage(message);
@@ -1165,8 +1261,8 @@ function openAiToAnthropic(body, originalModel, toolContextParts = []) {
 
   if (message.content) {
     if (reasoning) {
-      setAssistantReasoning(message.content, reasoning);
-      setToolContextReasoning(toolContextParts, message.content, reasoning);
+      setAssistantReasoning(message.content, reasoning, reasoningScope);
+      setToolContextReasoning(toolContextParts, message.content, reasoning, reasoningScope);
     }
     content.push({ type: "text", text: message.content });
   }
@@ -1245,6 +1341,20 @@ function requestProcessShutdown(server) {
   });
 }
 
+function upstreamRequestHeaders(req, upstreamApiKey) {
+  const headers = {
+    authorization: `Bearer ${upstreamApiKey}`,
+    "user-agent": `${PACKAGE_NAME}/${PACKAGE_VERSION}`,
+  };
+  // Keep the caller's conversation identity stable across tool calls and
+  // retries. OpenCode Go also recognizes Claude Code's native session header.
+  for (const name of UPSTREAM_REQUEST_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string" && value.trim()) headers[name] = value;
+  }
+  return headers;
+}
+
 async function callOpenCode(req, payload, upstreamContext) {
   const upstreamApiKey = requestAuthToken(req);
   if (!upstreamApiKey) {
@@ -1256,7 +1366,7 @@ async function callOpenCode(req, payload, upstreamContext) {
   const response = await fetch(`${CONFIG.upstreamBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${upstreamApiKey}`,
+      ...upstreamRequestHeaders(req, upstreamApiKey),
       "content-type": "application/json",
     },
     signal: upstreamContext.signal,
@@ -1439,7 +1549,7 @@ async function probeUpstream(req) {
   try {
     const response = await fetch(`${CONFIG.upstreamBaseUrl}/models`, {
       method: "GET",
-      headers: { authorization: `Bearer ${upstreamApiKey}` },
+      headers: upstreamRequestHeaders(req, upstreamApiKey),
       signal: controller.signal,
     });
     return { ok: response.ok, status: response.status };
@@ -1456,7 +1566,14 @@ async function probeUpstream(req) {
   }
 }
 
-async function streamOpenAiAsAnthropic(upstream, res, model, toolContextParts = [], upstreamContext = null) {
+async function streamOpenAiAsAnthropic(
+  upstream,
+  res,
+  model,
+  toolContextParts = [],
+  upstreamContext = null,
+  reasoningScope = null,
+) {
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache",
@@ -1605,8 +1722,8 @@ async function streamOpenAiAsAnthropic(upstream, res, model, toolContextParts = 
     }
     if (textBlockIndex !== null) contentBlockStop(res, textBlockIndex);
     if (textContent && reasoningContent) {
-      setAssistantReasoning(textContent, reasoningContent);
-      setToolContextReasoning(toolContextParts, textContent, reasoningContent);
+      setAssistantReasoning(textContent, reasoningContent, reasoningScope);
+      setToolContextReasoning(toolContextParts, textContent, reasoningContent, reasoningScope);
     }
     for (const state of toolBlocks.values()) {
       if (reasoningContent) setToolReasoning(state.id, reasoningContent);
@@ -1628,7 +1745,12 @@ async function handleMessages(req, res) {
   const body = await readJsonBody(req);
   const wantsStream = body.stream === true;
   const toolContextParts = currentToolContextParts(body.messages);
-  const payload = anthropicToOpenAi(body, wantsStream);
+  const session = [req.headers["x-opencode-session"], req.headers["x-claude-code-session-id"]]
+    .find((value) => typeof value === "string" && value.trim());
+  const reasoningScope = session
+    ? JSON.stringify({ model: body.model, session }) : null;
+  const replyScope = responseReasoningScope(body.messages, reasoningScope);
+  const payload = anthropicToOpenAi(body, wantsStream, reasoningScope);
   const upstreamContext = createUpstreamContext(res);
   let upstream;
 
@@ -1636,12 +1758,12 @@ async function handleMessages(req, res) {
     upstream = await callOpenCode(req, payload, upstreamContext);
 
     if (wantsStream) {
-      await streamOpenAiAsAnthropic(upstream, res, body.model, toolContextParts, upstreamContext);
+      await streamOpenAiAsAnthropic(upstream, res, body.model, toolContextParts, upstreamContext, replyScope);
       return;
     }
 
     const openAiBody = await upstream.json();
-    sendJson(res, 200, openAiToAnthropic(openAiBody, body.model, toolContextParts));
+    sendJson(res, 200, openAiToAnthropic(openAiBody, body.model, toolContextParts, replyScope));
   } catch (error) {
     throw normalizeUpstreamError(error, upstreamContext);
   } finally {
